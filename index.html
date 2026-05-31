@@ -17,7 +17,31 @@
 <body>
     <div id="ui">
         <h2>Click to Explore</h2>
-        <p>WASD to Move | SHIFT to Sprint | SPACE to Jump</p>
+        <p>WASD to Move | SHIFT to Sprint | SPACE to Jump | ESC for Settings</p>
+    </div>
+
+    <div id="settingsMenu" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(15, 20, 25, 0.9); padding: 30px; border-radius: 12px; color: white; font-family: monospace; border: 1px solid #333; min-width: 300px;">
+        <h2 style="margin-top: 0; color: #ffdfbb;">World Settings</h2>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display: block; margin-bottom: 5px;">Biome Scale</label>
+            <select id="setting-biome" style="width: 100%; padding: 8px; background: #222; color: white; border: 1px solid #555;">
+                <option value="realistic">Realistic (Massive Continents)</option>
+                <option value="arcade">Arcade (Fast Transitions)</option>
+            </select>
+        </div>
+
+        <div style="margin-bottom: 20px;">
+            <label style="display: block; margin-bottom: 5px;">Day/Night Cycle Length</label>
+            <select id="setting-time" style="width: 100%; padding: 8px; background: #222; color: white; border: 1px solid #555;">
+                <option value="60">1 Minute</option>
+                <option value="300">5 Minutes</option>
+                <option value="1200">20 Minutes</option>
+            </select>
+        </div>
+
+        <button id="btn-regenerate" style="width: 100%; padding: 10px; background: #8b3a3a; color: white; border: none; cursor: pointer; font-weight: bold; margin-bottom: 10px;">Regenerate World</button>
+        <button id="btn-resume" style="width: 100%; padding: 10px; background: #3d5c3d; color: white; border: none; cursor: pointer; font-weight: bold;">Resume Game</button>
     </div>
 
     <script type="importmap">
@@ -29,7 +53,6 @@
             }
         }
     </script>
-    
     <script type="module" src="./main.js"></script>
 </body>
 </html>

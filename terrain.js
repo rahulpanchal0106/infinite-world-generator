@@ -3,42 +3,75 @@ import { createNoise2D } from 'simplex-noise';
 
 const noise2D = createNoise2D();
 
+export function getBiomeData(x, z) {
+    const seed = window.GameSettings ? window.GameSettings.worldSeedOffset : 0;
+    
+    // THE FIX: The perfect middle ground.
+    // Realistic: 0.0001 (Biomes span ~10,000 units. A massive, immersive journey.)
+    // Arcade: 0.0004 (Biomes span ~2,500 units. About 6 chunks wide.)
+    const scale = (window.GameSettings && window.GameSettings.biomeScale === 'realistic') ? 0.0001 : 0.0004;
+    
+    return {
+        temp: noise2D((x + seed) * scale + 8000, (z + seed) * scale + 8000) * 0.5 + 0.5,
+        moisture: noise2D((x + seed) * scale + 10000, (z + seed) * scale + 10000) * 0.5 + 0.5,
+        // Towns kept slightly more frequent so you can still find them!
+        townNoise: noise2D((x + seed) * 0.0008 - 5000, (z +  seed) * 0.0008 - 5000) * 0.5 + 0.5,
+        vegNoise: noise2D((x + seed) * 0.008, (z + seed) * 0.008) * 0.5 + 0.5 
+    };
+}
+
 // --- 1. TERRAIN MATH ---
 export function getTerrainHeight(x, z) {
+    const seed = window.GameSettings ? window.GameSettings.worldSeedOffset : 0;
+    const px = x + seed;
+    const pz = z + seed;
+
+    const { temp } = getBiomeData(x, z);
+
     let y = 0;
-    let n1 = noise2D(x * 0.001, z * 0.001) * 0.5 + 0.5;
+    let n1 = noise2D(px * 0.001, pz * 0.001) * 0.5 + 0.5;
     n1 = Math.pow(n1, 3);
-    y += n1 * 300; 
-    let n2 = noise2D(x * 0.005, z * 0.005) * 0.5 + 0.5;
-    y += n2 * 40;
-    let n3 = noise2D(x * 0.05, z * 0.05) * 0.5 + 0.5;
-    y += n3 * 3;
+    let mountHeight = n1 * 300; 
+    let n2 = noise2D(px * 0.005, pz * 0.005) * 0.5 + 0.5;
+    let hillHeight = n2 * 40;
+    let n3 = noise2D(px * 0.05, pz * 0.05) * 0.5 + 0.5;
+    let detailHeight = n3 * 3;
+
+    if (temp > 0.6) {
+        const desertBlend = Math.min(1, (temp - 0.6) * 10); 
+        mountHeight = mountHeight * (1.0 - (desertBlend * 0.85)); 
+        hillHeight = hillHeight * (1.0 - (desertBlend * 0.3));
+        y += 28 * desertBlend; 
+    }
+
+    y += mountHeight + hillHeight + detailHeight;
     return Math.max(0, y); 
 }
 
 const chunkSize = 400; 
 const chunkResolution = 50; 
-const terrainMaterial = new THREE.MeshStandardMaterial({ color: 0x3d5c3d, roughness: 1.0 });
+const terrainMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1.0 });
 
 // --- 2. NATURE GEOMETRIES & MATERIALS ---
-const trunkGeo = new THREE.CylinderGeometry(1.0, 1.6, 8, 5); 
+const trunkGeo = new THREE.CylinderGeometry(1.0, 1.6, 8, 5);
 const leavesGeo = new THREE.ConeGeometry(6, 16, 5);
-trunkGeo.translate(0, 4, 0); 
-// Shift leaves up to rest on the taller trunk (with a little overlap)
-leavesGeo.translate(0, 14, 0);
-const bushGeo = new THREE.IcosahedronGeometry(2, 0);
-bushGeo.translate(0, 1.5, 0);
+trunkGeo.translate(0, 4, 0); leavesGeo.translate(0, 14, 0); 
+const pineLeavesGeo = new THREE.ConeGeometry(4, 20, 5); pineLeavesGeo.translate(0, 12, 0); 
+const cactusGeo = new THREE.CylinderGeometry(0.8, 0.8, 8, 5); cactusGeo.translate(0, 4, 0);
+const bushGeo = new THREE.IcosahedronGeometry(2, 0); bushGeo.translate(0, 1.5, 0);
 const rockGeo = new THREE.DodecahedronGeometry(1.5, 0);
 
 const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3219, flatShading: true });
 const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2b4222, flatShading: true });
+const pineMat = new THREE.MeshStandardMaterial({ color: 0x1a3320, flatShading: true }); 
+const cactusMat = new THREE.MeshStandardMaterial({ color: 0x477a43, flatShading: true }); 
 const bushMat = new THREE.MeshStandardMaterial({ color: 0x34542a, flatShading: true });
-const rockMat = new THREE.MeshStandardMaterial({ color: 0x666666, flatShading: true, roughness: 0.9 });
+const rockMat = new THREE.MeshStandardMaterial({ color: 0x88949e, flatShading: true, roughness: 0.9 }); 
 
-// --- 3. ARCHITECTURE MATERIALS ---
-const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8e5d1, flatShading: true }); // Warmer, rustic plaster
-const roofMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, flatShading: true }); // Dark wood shingle color
-const floorMat = new THREE.MeshStandardMaterial({ color: 0x3d2817, flatShading: true }); // Dark floor
+// --- 3. ARCHITECTURE ---
+const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8e5d1, flatShading: true }); 
+const roofMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, flatShading: true }); 
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x3d2817, flatShading: true }); 
 
 // --- 4. THE CHUNK CLASS ---
 class Chunk {
@@ -56,115 +89,109 @@ class Chunk {
     buildTerrain() {
         const geometry = new THREE.PlaneGeometry(chunkSize, chunkSize, chunkResolution, chunkResolution);
         geometry.rotateX(-Math.PI / 2);
+        
         const positions = geometry.attributes.position.array;
+        const colors = [];
         const offsetX = this.chunkX * chunkSize;
         const offsetZ = this.chunkZ * chunkSize;
 
+        const cTundra = new THREE.Color(0xc9d4db); 
+        const cForest = new THREE.Color(0x3d5c3d); 
+        const cDesert = new THREE.Color(0xd2b48c); 
+        const cRock = new THREE.Color(0x8a959e); 
+        const cSandstone = new THREE.Color(0xb08d6a); 
+        const cSnow = new THREE.Color(0xffffff); 
+
         for (let i = 0; i < positions.length; i += 3) {
-            positions[i + 1] = getTerrainHeight(positions[i] + offsetX, positions[i + 2] + offsetZ);
+            const gx = positions[i] + offsetX;
+            const gz = positions[i + 2] + offsetZ;
+            const gy = getTerrainHeight(gx, gz);
+            positions[i + 1] = gy;
+
+            const { temp } = getBiomeData(gx, gz);
+            const vertexColor = new THREE.Color();
+
+            if (temp < 0.4) vertexColor.lerpColors(cTundra, cForest, Math.max(0, (temp - 0.3) * 10));
+            else if (temp > 0.6) vertexColor.lerpColors(cForest, cDesert, Math.max(0, (temp - 0.6) * 10));
+            else vertexColor.copy(cForest);
+
+            const gyNext = getTerrainHeight(gx + 1, gz);
+            const slope = Math.abs(gyNext - gy);
+
+            // UPGRADE: Dynamic Rock and Snow lines based on Temperature!
+            const rockLine = 150 + (temp * 60); // Hotter = rocks start higher
+            const snowLine = 220 + (temp * 100); // Hotter = snow starts MUCH higher
+            
+            let rockBlend = Math.max(0, Math.min(1, (slope - 0.6) / 0.4)); 
+            let altRockBlend = Math.max(0, Math.min(1, (gy - rockLine) / 40));
+            
+            let currentRockColor = temp > 0.6 ? cSandstone : cRock;
+            vertexColor.lerp(currentRockColor, Math.max(rockBlend, altRockBlend));
+
+            if (gy > snowLine && temp < 0.60) { // Deep deserts never get snow
+                let snowBlend = Math.max(0, Math.min(1, (gy - snowLine) / 40));
+                let snowStickiness = 1.0 - Math.max(0, Math.min(1, (slope - 0.7) / 0.5));
+                vertexColor.lerp(cSnow, snowBlend * snowStickiness);
+            }
+
+            colors.push(vertexColor.r, vertexColor.g, vertexColor.b);
         }
         
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
         geometry.computeVertexNormals(); 
+        
         const terrain = new THREE.Mesh(geometry, terrainMaterial);
         terrain.position.set(offsetX, 0, offsetZ);
-        
         terrain.receiveShadow = true; 
-        terrain.castShadow = true; // <--- ADD THIS BRAND NEW LINE
+        terrain.castShadow = true; 
         
         this.scene.add(terrain);
         this.meshes.push(terrain);
     }
-    // --- UPGRADED: DETAILED, GROUNDED CABIN ---
+
     buildHollowCabin(gx, gy, gz, rotationAngle) {
         const cabinGroup = new THREE.Group();
-        
-        // NEW DIMENSIONS: Smaller footprint, deep foundations
-        const wallThickness = 0.8;
-        const width = 10;
-        const depth = 10;
-        const visibleHeight = 7;
-        const foundationDepth = 4; // Pushes 4 units underground to hide slopes
-        const totalHeight = visibleHeight + foundationDepth;
-        const doorWidth = 3;
-        const doorHeight = 5; 
-
-        // Center offset so the foundation sinks into the ground
+        const wallThickness = 0.8, width = 10, depth = 10, visibleHeight = 7, foundationDepth = 4;
+        const totalHeight = visibleHeight + foundationDepth, doorWidth = 3, doorHeight = 5; 
         const yOffset = (totalHeight / 2) - foundationDepth;
 
-        // 1. THE WALLS
-        const backWall = new THREE.Mesh(new THREE.BoxGeometry(width, totalHeight, wallThickness), wallMat);
-        backWall.position.set(0, yOffset, -depth/2);
-        
-        const leftWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, totalHeight, depth), wallMat);
-        leftWall.position.set(-width/2, yOffset, 0);
-        
-        const rightWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, totalHeight, depth), wallMat);
-        rightWall.position.set(width/2, yOffset, 0);
+        const backWall = new THREE.Mesh(new THREE.BoxGeometry(width, totalHeight, wallThickness), wallMat); backWall.position.set(0, yOffset, -depth/2);
+        const leftWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, totalHeight, depth), wallMat); leftWall.position.set(-width/2, yOffset, 0);
+        const rightWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, totalHeight, depth), wallMat); rightWall.position.set(width/2, yOffset, 0);
 
-        // Front wall split into 3 pieces (Left, Right, and Header above the door)
         const frontWallWidth = (width - doorWidth) / 2;
-        const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(frontWallWidth, totalHeight, wallThickness), wallMat);
-        frontLeft.position.set(-width/2 + frontWallWidth/2, yOffset, depth/2);
-        
-        const frontRight = new THREE.Mesh(new THREE.BoxGeometry(frontWallWidth, totalHeight, wallThickness), wallMat);
-        frontRight.position.set(width/2 - frontWallWidth/2, yOffset, depth/2);
+        const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(frontWallWidth, totalHeight, wallThickness), wallMat); frontLeft.position.set(-width/2 + frontWallWidth/2, yOffset, depth/2);
+        const frontRight = new THREE.Mesh(new THREE.BoxGeometry(frontWallWidth, totalHeight, wallThickness), wallMat); frontRight.position.set(width/2 - frontWallWidth/2, yOffset, depth/2);
 
         const headerHeight = totalHeight - (doorHeight + foundationDepth);
-        const frontHeader = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, headerHeight, wallThickness), wallMat);
-        frontHeader.position.set(0, totalHeight - headerHeight/2 - foundationDepth, depth/2);
+        const frontHeader = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, headerHeight, wallThickness), wallMat); frontHeader.position.set(0, totalHeight - headerHeight/2 - foundationDepth, depth/2);
 
-        // 2. TIMBER FRAME CORNER PILLARS (Hides the ugly seams!)
         const pillarGeo = new THREE.BoxGeometry(1.2, totalHeight + 0.5, 1.2);
         const p1 = new THREE.Mesh(pillarGeo, trunkMat); p1.position.set(-width/2, yOffset, -depth/2);
         const p2 = new THREE.Mesh(pillarGeo, trunkMat); p2.position.set(width/2, yOffset, -depth/2);
         const p3 = new THREE.Mesh(pillarGeo, trunkMat); p3.position.set(-width/2, yOffset, depth/2);
         const p4 = new THREE.Mesh(pillarGeo, trunkMat); p4.position.set(width/2, yOffset, depth/2);
 
-        // 3. FLOOR & ROOF
-        const floor = new THREE.Mesh(new THREE.PlaneGeometry(width - 1.5, depth - 1.5), floorMat);
-        floor.rotateX(-Math.PI / 2);
-        floor.position.set(0, 0.2, 0); // Sits just slightly above the grass
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(width - 1.5, depth - 1.5), floorMat); floor.rotateX(-Math.PI / 2); floor.position.set(0, 0.2, 0); 
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(8.5, 5, 4), roofMat); roof.rotateY(Math.PI / 4); roof.position.set(0, visibleHeight + 2.5, 0); 
 
-        // Roof is now wider than the house (radius 8 vs width 10) to create overhangs
-        const roof = new THREE.Mesh(new THREE.ConeGeometry(8.5, 5, 4), roofMat);
-        roof.rotateY(Math.PI / 4);
-        roof.position.set(0, visibleHeight + 2.5, 0); 
-
-        // Add everything to the group
         [backWall, leftWall, rightWall, frontLeft, frontRight, frontHeader, p1, p2, p3, p4, floor, roof].forEach(m => {
-            m.castShadow = true;
-            m.receiveShadow = true;
-            cabinGroup.add(m);
+            m.castShadow = true; m.receiveShadow = true; cabinGroup.add(m);
         });
 
-        cabinGroup.position.set(gx, gy, gz);
-        cabinGroup.rotation.y = rotationAngle;
-        
-        this.scene.add(cabinGroup);
-        this.meshes.push(cabinGroup);
+        cabinGroup.position.set(gx, gy, gz); cabinGroup.rotation.y = rotationAngle;
+        this.scene.add(cabinGroup); this.meshes.push(cabinGroup);
 
-        // 4. PHYSICS COLLISIONS
         cabinGroup.updateMatrixWorld(true);
-
         const addWallCollision = (mesh) => {
             const box = new THREE.Box3().setFromObject(mesh);
-            this.obstacles.push({
-                type: 'box',
-                minX: box.min.x, maxX: box.max.x,
-                minZ: box.min.z, maxZ: box.max.z
-            });
+            this.obstacles.push({ type: 'box', minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z });
         };
-
-        // We only add collision to the ground-level walls, leaving the door open
-        addWallCollision(backWall);
-        addWallCollision(leftWall);
-        addWallCollision(rightWall);
-        addWallCollision(frontLeft);
-        addWallCollision(frontRight);
+        addWallCollision(backWall); addWallCollision(leftWall); addWallCollision(rightWall); addWallCollision(frontLeft); addWallCollision(frontRight);
     }
 
     buildWorld() {
-        const treeData = [], bushData = [], rockData = [];
+        const oakData = [], pineData = [], cactusData = [], bushData = [], rockData = [];
         const offsetX = this.chunkX * chunkSize;
         const offsetZ = this.chunkZ * chunkSize;
         const houseLocations = []; 
@@ -178,9 +205,8 @@ class Chunk {
             const gyNext = getTerrainHeight(gx + 1, gz);
             const slope = Math.abs(gyNext - gy);
 
-            const moisture = noise2D(gx * 0.002 + 10000, gz * 0.002 + 10000) * 0.5 + 0.5;
+            const { temp, moisture, townNoise, vegNoise } = getBiomeData(gx, gz);
             const treeLine = 40 + (moisture * 160); 
-            const townNoise = noise2D(gx * 0.0003 - 5000, gz * 0.0003 - 5000) * 0.5 + 0.5;
 
             if (gy > 26) { 
                 const rand = Math.random();
@@ -188,10 +214,10 @@ class Chunk {
 
                 houseLocations.forEach(h => {
                     const dx = gx - h.x; const dz = gz - h.z;
-                    if (dx*dx + dz*dz < 250) insideHouseRadius = true; // Reduced clearance for smaller houses
+                    if (dx*dx + dz*dz < 250) insideHouseRadius = true; 
                 });
                 
-                if (townNoise > 0.92 && slope < 0.25 && gy < 80) {
+                if (townNoise > 0.92 && slope < 0.25 && gy < 80 && temp > 0.35 && temp < 0.65) {
                     if (rand < 0.15 && !insideHouseRadius && houseLocations.length < 15) {
                         const streetRotation = Math.floor(Math.random() * 4) * (Math.PI / 2);
                         this.buildHollowCabin(gx, gy, gz, streetRotation);
@@ -201,19 +227,36 @@ class Chunk {
                 } 
                 
                 if (!insideHouseRadius) {
+                    // UPGRADE: Dynamic Spawning Math
                     const isTownZone = townNoise > 0.92;
-                    const treeChance = isTownZone ? 0.01 : 0.05; 
+                    // Multiply base chance by our vegNoise to create clumps and clearings!
+                    const treeChance = isTownZone ? 0.005 : (0.05 * vegNoise * (moisture + 0.2)); 
 
                     if (slope < 0.8 && gy < treeLine) {
-                        if (rand < treeChance && treeData.length < 150) {
-                            treeData.push({ lx, gy, lz });
-                            this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 1.2 });
+                        if (rand < treeChance) {
+                            if (temp < 0.35) {
+                                pineData.push({ lx, gy, lz }); 
+                                this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.5 });
+                            } else if (temp > 0.65) {
+                                // DESERT FIX: Cacti spawn 90% less often than trees
+                                if (Math.random() > 0.90) { 
+                                    cactusData.push({ lx, gy, lz }); 
+                                    this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 1.0 }); // Cacti are thinner
+                                }
+                            } else {
+                                oakData.push({ lx, gy, lz }); 
+                                this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.5 });
+                            }
                         }
-                        else if (rand < 0.15 && bushData.length < 200) bushData.push({ lx, gy, lz });
+                        // Bushes also follow the clumping noise and don't spawn in deserts
+                        else if (rand < 0.15 * vegNoise && temp < 0.65) {
+                            bushData.push({ lx, gy, lz });
+                        }
                     }
                 }
                 
-                if (rand > 0.95 && rockData.length < 80 && !insideHouseRadius) {
+                // Rocks are sparser, but spawn everywhere
+                if (rand > 0.98 && rockData.length < 40 && !insideHouseRadius) {
                     rockData.push({ lx, gy, lz });
                     this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.0 });
                 }
@@ -239,29 +282,24 @@ class Chunk {
         };
 
         const meshesToAdd = [
-            buildInstanced(trunkGeo, trunkMat, treeData, true, {min: 0.7, range: 0.8}),
-            buildInstanced(leavesGeo, leavesMat, treeData, true, {min: 0.7, range: 0.8}),
+            buildInstanced(trunkGeo, trunkMat, oakData, true, {min: 0.7, range: 0.8}),
+            buildInstanced(leavesGeo, leavesMat, oakData, true, {min: 0.7, range: 0.8}),
+            buildInstanced(trunkGeo, trunkMat, pineData, true, {min: 0.8, range: 0.5}), 
+            buildInstanced(pineLeavesGeo, pineMat, pineData, true, {min: 0.8, range: 0.5}),
+            buildInstanced(cactusGeo, cactusMat, cactusData, true, {min: 0.8, range: 1.2}), 
             buildInstanced(bushGeo, bushMat, bushData, false, {min: 0.3, range: 0.7}),
             buildInstanced(rockGeo, rockMat, rockData, true, {min: 0.5, range: 1.5})
         ];
 
         meshesToAdd.forEach(mesh => {
-            if (mesh) {
-                this.scene.add(mesh);
-                this.meshes.push(mesh);
-            }
+            if (mesh) { this.scene.add(mesh); this.meshes.push(mesh); }
         });
     }
 
     dispose() {
         this.meshes.forEach(mesh => {
-            if (mesh.isGroup) {
-                mesh.children.forEach(child => {
-                    if (child.geometry) child.geometry.dispose();
-                });
-            } else if (mesh.geometry) {
-                mesh.geometry.dispose(); 
-            }
+            if (mesh.isGroup) mesh.children.forEach(child => { if (child.geometry) child.geometry.dispose(); });
+            else if (mesh.geometry) mesh.geometry.dispose(); 
             this.scene.remove(mesh);
         });
     }
@@ -276,9 +314,10 @@ export function findTownSpawn() {
         for (let angle = 0; angle < Math.PI * 2; angle += Math.max(angleStep, 0.1)) {
             const gx = searchRadius * Math.cos(angle);
             const gz = searchRadius * Math.sin(angle);
-            const townNoise = noise2D(gx * 0.0003 - 5000, gz * 0.0003 - 5000) * 0.5 + 0.5;
             
-            if (townNoise > 0.92) {
+            const { temp, townNoise } = getBiomeData(gx, gz);
+            
+            if (townNoise > 0.92 && temp > 0.35 && temp < 0.65) {
                 const gy = getTerrainHeight(gx, gz);
                 if (gy > 26 && gy < 80) {
                     const gyNext = getTerrainHeight(gx + 1, gz);
@@ -310,9 +349,7 @@ export class ChunkManager {
                 const key = `${cx},${cz}`;
                 activeKeys.add(key);
 
-                if (!this.chunks.has(key)) {
-                    this.chunks.set(key, new Chunk(cx, cz, this.scene));
-                }
+                if (!this.chunks.has(key)) this.chunks.set(key, new Chunk(cx, cz, this.scene));
             }
         }
 
@@ -327,20 +364,16 @@ export class ChunkManager {
     checkCollision(px, pz, radius) {
         for (const chunk of this.chunks.values()) {
             for (const obs of chunk.obstacles) {
-                
                 if (obs.type === 'circle') {
                     const dx = px - obs.x;
                     const dz = pz - obs.z;
                     if (dx * dx + dz * dz < (obs.r + radius) * (obs.r + radius)) return true;
                 } 
-                
                 else if (obs.type === 'box') {
                     const closestX = Math.max(obs.minX, Math.min(px, obs.maxX));
                     const closestZ = Math.max(obs.minZ, Math.min(pz, obs.maxZ));
-                    
                     const dx = px - closestX;
                     const dz = pz - closestZ;
-                    
                     if (dx * dx + dz * dz < radius * radius) return true;
                 }
             }

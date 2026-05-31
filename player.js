@@ -43,8 +43,8 @@ export class Player {
     update(delta) {
         if (!this.controls.isLocked) return;
 
-        this.velocity.x -= this.velocity.x * 10.0 * delta;
-        this.velocity.z -= this.velocity.z * 10.0 * delta;
+        this.velocity.x -= this.velocity.x * 0.10 * delta;
+        this.velocity.z -= this.velocity.z * 0.10 * delta;
         this.velocity.y -= 9.8 * 6.0 * delta; 
 
         this.direction.z = Number(this.moveState.forward) - Number(this.moveState.backward);

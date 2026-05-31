@@ -1,85 +1,97 @@
 import * as THREE from 'three';
 import DynamicEnvironment from './environment.js';
-import { Player } from './player.js';
-// Change your terrain import to this:
 import { ChunkManager, getTerrainHeight, findTownSpawn } from './terrain.js';
+import { Player } from './player.js';
+
+// --- NEW: GLOBAL SETTINGS STATE ---
+window.GameSettings = {
+    biomeScale: 'realistic', 
+    worldSeedOffset: 0 // Used to randomly generate new worlds
+};
 
 // 1. Core Setup
 const scene = new THREE.Scene();
-// Push fog way back to reveal the epic horizon
 scene.fog = new THREE.Fog(0x87CEEB, 500, 3500);
-
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
-// --- NEW: THE INFINITE OCEAN ---
+
+// Infinite Ocean
 const waterGeometry = new THREE.PlaneGeometry(8000, 8000);
 waterGeometry.rotateX(-Math.PI / 2);
-const waterMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0x0066ff,
-    transparent: true,
-    opacity: 0.7,
-    roughness: 0.1,
-    metalness: 0.1,
-    transmission: 0.5 // Gives it a nice glassy, deep look
-});
+const waterMaterial = new THREE.MeshPhysicalMaterial({ color: 0x0066ff, transparent: true, opacity: 0.7, roughness: 0.1, transmission: 0.5 });
 const ocean = new THREE.Mesh(waterGeometry, waterMaterial);
-ocean.position.y = 25; // Sea level!
+ocean.position.y = 25; 
 scene.add(ocean);
-// 2. Initialize Game Modules
+
+// Initialize Game Modules
 const environment = new DynamicEnvironment(scene, { dayDurationSeconds: 60, cloudSpeed: 40 });
+let chunkManager = new ChunkManager(scene);
 
-// Start the Infinite Chunk Manager
-const chunkManager = new ChunkManager(scene);
-
+// --- UI AND SETTINGS LOGIC ---
 const uiElement = document.getElementById('ui');
-const player = new Player(
-    camera, 
-    document.body, 
-    uiElement, 
-    getTerrainHeight, 
-    (x, z, r) => chunkManager.checkCollision(x, z, r) // Pass collision logic
-);
+const settingsMenu = document.getElementById('settingsMenu');
+const player = new Player(camera, document.body, uiElement, getTerrainHeight, (x, z, r) => chunkManager.checkCollision(x, z, r));
 
+// When player presses ESC, PointerLock unlocks. We catch that event here:
+player.controls.addEventListener('unlock', () => {
+    uiElement.style.display = 'none';
+    settingsMenu.style.display = 'block'; // Show our new settings menu
+});
+
+document.getElementById('btn-resume').addEventListener('click', () => {
+    settingsMenu.style.display = 'none';
+    player.controls.lock(); // Goes back to the game
+});
+
+// Apply Settings
+document.getElementById('setting-biome').addEventListener('change', (e) => {
+    window.GameSettings.biomeScale = e.target.value;
+});
+
+document.getElementById('setting-time').addEventListener('change', (e) => {
+    environment.dayDurationSeconds = parseInt(e.target.value);
+});
+
+// The "Regenerate World" Nuke Button
+document.getElementById('btn-regenerate').addEventListener('click', () => {
+    // 1. Change the mathematical seed offset
+    window.GameSettings.worldSeedOffset = Math.random() * 100000;
+    
+    // 2. Delete all existing chunks
+    chunkManager.chunks.forEach(chunk => chunk.dispose());
+    chunkManager.chunks.clear();
+
+    // 3. Find a new town and teleport!
+    const spawnPoint = findTownSpawn();
+    camera.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
+    chunkManager.update(camera.position);
+    
+    settingsMenu.style.display = 'none';
+    player.controls.lock();
+});
+
+// Initial Spawn
 const spawnPoint = findTownSpawn();
-camera.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z); // camera.position.set(0, getTerrainHeight(0, 0) + 5, 0);
+camera.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
 chunkManager.update(camera.position);
-// 3. Render Loop
-let prevTime = performance.now();
 
+// Render Loop
+let prevTime = performance.now();
 function animate() {
     requestAnimationFrame(animate);
-    
     const time = performance.now();
     const delta = (time - prevTime) / 1000;
 
-   environment.update(delta, camera.position);
+    environment.update(delta, camera.position);
     player.update(delta);
-    
-    // TELL THE WORLD WHERE THE PLAYER IS
     chunkManager.update(camera.position);
-
-    // FIX: Lock the sky sphere to the player so you can never walk out of it
-    if (environment.skyMesh) {
-        environment.skyMesh.position.copy(camera.position);
-    }
-
-    // TELL THE WORLD WHERE THE PLAYER IS
-    chunkManager.update(camera.position);
-
-    // Lock the sky sphere to the player
-    if (environment.skyMesh) {
-        environment.skyMesh.position.copy(camera.position);
-    }
     
-    // NEW: Lock the infinite ocean to the player's X and Z (keep Y at 25)
     ocean.position.x = camera.position.x;
     ocean.position.z = camera.position.z;
-
-    renderer.render(scene, camera);
 
     renderer.render(scene, camera);
     prevTime = time;

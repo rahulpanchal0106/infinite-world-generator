@@ -1,18 +1,16 @@
 import * as THREE from 'three';
 
-// 1. UPDATED: Richer, Fiery colors for the Minecraft-style horizon glow!
+// Richer, Fiery colors for the Minecraft-style horizon glow
 function getSkyColorAtTime(time, targetColor) {
-    const dawn = new THREE.Color(0xff5500); // Fiery Sunrise Orange
-    const noon = new THREE.Color(0x87CEEB); // Sky Blue
-    const twilight = new THREE.Color(0xff2200); // Deep Sunset Red
-    const night = new THREE.Color(0x0a0f18); // Dark Navy
+    const dawn = new THREE.Color(0xff5500); 
+    const noon = new THREE.Color(0x87CEEB); 
+    const twilight = new THREE.Color(0xff2200); 
+    const night = new THREE.Color(0x0a0f18); 
 
     if (time < 5) targetColor.copy(night);
-    // 5 AM to 7 AM: Night -> Dawn -> Noon
     else if (time < 6) targetColor.lerpColors(night, dawn, (time - 5)); 
     else if (time < 8) targetColor.lerpColors(dawn, noon, (time - 6) / 2); 
     else if (time < 16) targetColor.copy(noon);
-    // 4 PM to 7 PM: Noon -> Twilight -> Night
     else if (time < 18) targetColor.lerpColors(noon, twilight, (time - 16) / 2); 
     else if (time < 19) targetColor.lerpColors(twilight, night, (time - 18)); 
     else targetColor.copy(night);
@@ -92,60 +90,44 @@ class DynamicEnvironment {
     }
 
     _initFluffyClouds() {
-        const cloudCount = 50; // Increased count since some will be small
+        const cloudCount = 50; 
         const puffGeo = new THREE.IcosahedronGeometry(1, 3); 
-        const puffMat = new THREE.MeshStandardMaterial({ 
-            color: 0xffffff, 
-            roughness: 1.0, 
-            flatShading: false 
-        });
+        const puffMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0, flatShading: false });
 
         for (let i = 0; i < cloudCount; i++) {
             const cloudGroup = new THREE.Group();
-            
-            // 1. ROLL FOR CLOUD TYPE
             const cloudType = Math.random();
             let puffCount, scaleMultiplier, spread;
 
             if (cloudType < 0.15) {
-                // 15% Chance: MASSIVE Cumulonimbus
                 puffCount = 12 + Math.floor(Math.random() * 8);
                 scaleMultiplier = 2.5; 
                 spread = 300;
             } else if (cloudType < 0.65) {
-                // 50% Chance: Standard Fluffy Cumulus
                 puffCount = 5 + Math.floor(Math.random() * 5);
                 scaleMultiplier = 1.0;
                 spread = 120;
             } else {
-                // 35% Chance: Small Wispy Clouds
                 puffCount = 3 + Math.floor(Math.random() * 2);
                 scaleMultiplier = 0.5;
                 spread = 60;
             }
 
-            // 2. BUILD THE CLOUD
             for(let j = 0; j < puffCount; j++) {
                 const puff = new THREE.Mesh(puffGeo, puffMat);
-                
-                // Base size multiplied by our archetype scale
                 const size = (35 + Math.random() * 45) * scaleMultiplier;
-                puff.scale.set(size, size * 0.6, size); // Squash Y for flat bottoms
-                
+                puff.scale.set(size, size * 0.6, size); 
                 puff.position.set(
                     (Math.random() - 0.5) * spread,
-                    Math.random() * (40 * scaleMultiplier), // Taller clouds get higher puffs
+                    Math.random() * (40 * scaleMultiplier), 
                     (Math.random() - 0.5) * spread
                 );
-                
                 puff.castShadow = true;
                 puff.receiveShadow = true;
                 cloudGroup.add(puff);
             }
 
-            // 3. RANDOMIZE ALTITUDE (250 to 900 units high!)
-            const altitude = 450 + Math.pow(Math.random(), 2) * 750; // Math.pow pushes more clouds lower, a few very high
-
+            const altitude = 250 + Math.pow(Math.random(), 2) * 650; 
             cloudGroup.position.set(
                 Math.random() * 6000 - 3000, 
                 altitude, 
@@ -156,16 +138,18 @@ class DynamicEnvironment {
             this.scene.add(cloudGroup);
         }
     }
+
     update(deltaTime, playerPosition) {
         this.time += (deltaTime / this.dayDurationSeconds) * 24;
         this.time %= 24; 
 
-        // Update Sky & Fog
+        // Update Sky & Fog Color
         const currentSkyColor = new THREE.Color();
         getSkyColorAtTime(this.time, currentSkyColor);
         this.skyMesh.material.color.copy(currentSkyColor);
         if (this.scene.fog) this.scene.fog.color.copy(currentSkyColor);
 
+        // Lock Sky and Stars to player
         if (playerPosition) {
             this.skyMesh.position.copy(playerPosition);
             this.starsMesh.position.copy(playerPosition);
@@ -174,79 +158,82 @@ class DynamicEnvironment {
         const px = playerPosition ? playerPosition.x : 0;
         const pz = playerPosition ? playerPosition.z : 0;
         
+        // Orbit Math
         const lightAngle = (this.time / 24) * Math.PI * 2 - Math.PI / 2; 
         const orbitDistance = 2500; 
         this.sunMesh.position.set(px + Math.cos(lightAngle) * orbitDistance, Math.sin(lightAngle) * orbitDistance, pz);
-        
         const moonAngle = lightAngle + Math.PI;
         this.moonMesh.position.set(px + Math.cos(moonAngle) * orbitDistance, Math.sin(moonAngle) * orbitDistance, pz);
 
-        // --- 2. UPDATED: SMOOTH LIGHTING TRANSITIONS ---
+        // Lighting Transitions
         let dirIntensity = 0;
         let ambIntensity = 0.05;
         let lightColor = new THREE.Color();
 
         if (this.time >= 6 && this.time < 18) {
-            // DAYTIME LOGIC
             this.lights.mainLight.position.copy(this.sunMesh.position);
-            
             if (this.time < 7) {
-                // Sunrise: Fade sun IN (6 AM to 7 AM)
                 const t = this.time - 6; 
                 dirIntensity = THREE.MathUtils.lerp(0, 1.5, t);
                 ambIntensity = THREE.MathUtils.lerp(0.05, 0.4, t);
                 lightColor.lerpColors(new THREE.Color(0xff5500), new THREE.Color(0xffdfbb), t);
                 this.starsMaterial.opacity = THREE.MathUtils.lerp(1, 0, t);
             } else if (this.time > 17) {
-                // Sunset: Fade sun OUT (5 PM to 6 PM)
                 const t = this.time - 17; 
                 dirIntensity = THREE.MathUtils.lerp(1.5, 0, t);
                 ambIntensity = THREE.MathUtils.lerp(0.4, 0.05, t);
                 lightColor.lerpColors(new THREE.Color(0xffdfbb), new THREE.Color(0xff5500), t);
                 this.starsMaterial.opacity = THREE.MathUtils.lerp(0, 1, t);
             } else {
-                // High Noon
                 dirIntensity = 1.5;
                 ambIntensity = 0.4;
                 lightColor.set(0xffdfbb);
                 this.starsMaterial.opacity = 0;
             }
         } else {
-            // NIGHTTIME LOGIC
             this.lights.mainLight.position.copy(this.moonMesh.position);
-            
             if (this.time >= 18 && this.time < 19) {
-                // Dusk: Fade moon IN (6 PM to 7 PM)
                 const t = this.time - 18; 
                 dirIntensity = THREE.MathUtils.lerp(0, 0.15, t);
                 lightColor.set(0x8a9bff);
                 this.starsMaterial.opacity = 1;
             } else if (this.time >= 5 && this.time < 6) {
-                // Dawn: Fade moon OUT (5 AM to 6 AM)
                 const t = this.time - 5; 
                 dirIntensity = THREE.MathUtils.lerp(0.15, 0, t);
                 lightColor.set(0x8a9bff);
                 this.starsMaterial.opacity = 1;
             } else {
-                // Midnight
                 dirIntensity = 0.15;
                 lightColor.set(0x8a9bff);
                 this.starsMaterial.opacity = 1;
             }
         }
 
-        // Apply smooth lighting changes
         this.lights.mainLight.intensity = dirIntensity;
         this.lights.ambient.intensity = ambIntensity;
         this.lights.mainLight.color.copy(lightColor);
-
-        // Only cast shadows when the light is bright enough (prevents weird cloud dots)
         this.lights.mainLight.castShadow = dirIntensity > 0.2;
 
-        // Move Clouds
+        // --- NEW: OMNI-DIRECTIONAL CLOUD TREADMILL ---
+        const cloudBoundary = 3000; // Half of our 6000 unit box
+
         this.clouds.forEach((cloud, index) => {
+            // 1. Move cloud with the wind
             cloud.position.x += this.cloudSpeed * deltaTime * (1 + index * 0.1); 
-            if (cloud.position.x > px + 3000) cloud.position.x = px - 3000; 
+
+            // 2. X-Axis Wrap (Handles wind AND player walking East/West)
+            if (cloud.position.x > px + cloudBoundary) {
+                cloud.position.x -= (cloudBoundary * 2);
+            } else if (cloud.position.x < px - cloudBoundary) {
+                cloud.position.x += (cloudBoundary * 2);
+            }
+
+            // 3. Z-Axis Wrap (Handles player walking North/South)
+            if (cloud.position.z > pz + cloudBoundary) {
+                cloud.position.z -= (cloudBoundary * 2);
+            } else if (cloud.position.z < pz - cloudBoundary) {
+                cloud.position.z += (cloudBoundary * 2);
+            }
         });
     }
 }
