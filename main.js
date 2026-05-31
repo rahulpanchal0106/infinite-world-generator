@@ -34,8 +34,15 @@ let chunkManager = new ChunkManager(scene);
 // --- UI AND SETTINGS LOGIC ---
 const uiElement = document.getElementById('ui');
 const settingsMenu = document.getElementById('settingsMenu');
-const player = new Player(camera, document.body, uiElement, getTerrainHeight, (x, z, r) => chunkManager.checkCollision(x, z, r));
-
+// NEW: We added 'scene' as the final argument so the player's raycaster can check the world
+const player = new Player(
+    camera, 
+    document.body, 
+    uiElement, 
+    getTerrainHeight, 
+    (x, z, r) => chunkManager.checkCollision(x, z, r),
+    scene 
+);
 // When player presses ESC, PointerLock unlocks. We catch that event here:
 player.controls.addEventListener('unlock', () => {
     uiElement.style.display = 'none';

@@ -3,26 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minimalist Mountain Adventurer</title>
+    <title>Procedural World</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #111; }
-        canvas { display: block; }
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        
         #ui {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            text-align: center; color: white; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 20px; border-radius: 8px; cursor: pointer;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(15, 20, 25, 0.85); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: white;
+            font-family: monospace; z-index: 10; cursor: pointer;
+        }
+        #ui h1 { color: #ffdfbb; font-size: 3rem; margin: 0 0 10px 0; }
+        #ui p { color: #aaa; margin: 5px 0; font-size: 1.1rem; }
+        
+        /* NEW: WIDENED SNIPER SCOPE */
+        #scope-overlay {
+            display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            /* Pushed transparent out to 40% (was 25%), and black out to 60% (was 45%) */
+            background: radial-gradient(circle, transparent 40%, black 60%);
+            pointer-events: none; z-index: 90;
+        }
+        /* The thin crosshair lines inside the scope */
+        #scope-overlay::before {
+            content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 2px;
+            background: rgba(0, 0, 0, 0.8); transform: translateY(-50%);
+        }
+        #scope-overlay::after {
+            content: ''; position: absolute; top: 0; left: 50%; width: 2px; height: 100%;
+            background: rgba(0, 0, 0, 0.8); transform: translateX(-50%);
+        }
+        
+        /* The Red Dot in the middle of the scope */
+        #scope-dot {
+            position: absolute; top: 50%; left: 50%; width: 4px; height: 4px;
+            background: red; border-radius: 50%; transform: translate(-50%, -50%);
         }
     </style>
 </head>
-<body>
+<body oncontextmenu="return false;">
+    
     <div id="ui">
-        <h2>Click to Explore</h2>
+        <h1>Click to Explore</h1>
         <p>WASD to Move | SHIFT to Sprint | SPACE to Jump | ESC for Settings</p>
+        <p>1 for Sniper | 2 for Deagle | LEFT CLICK to Shoot | RIGHT CLICK to Scope</p>
     </div>
 
-    <div id="settingsMenu" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(15, 20, 25, 0.9); padding: 30px; border-radius: 12px; color: white; font-family: monospace; border: 1px solid #333; min-width: 300px;">
+    <div id="settingsMenu" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(15, 20, 25, 0.9); padding: 30px; border-radius: 12px; color: white; font-family: monospace; border: 1px solid #333; min-width: 300px; z-index: 20;">
         <h2 style="margin-top: 0; color: #ffdfbb;">World Settings</h2>
-        
         <div style="margin-bottom: 20px;">
             <label style="display: block; margin-bottom: 5px;">Biome Scale</label>
             <select id="setting-biome" style="width: 100%; padding: 8px; background: #222; color: white; border: 1px solid #555;">
@@ -30,7 +57,6 @@
                 <option value="arcade">Arcade (Fast Transitions)</option>
             </select>
         </div>
-
         <div style="margin-bottom: 20px;">
             <label style="display: block; margin-bottom: 5px;">Day/Night Cycle Length</label>
             <select id="setting-time" style="width: 100%; padding: 8px; background: #222; color: white; border: 1px solid #555;">
@@ -39,9 +65,14 @@
                 <option value="1200">20 Minutes</option>
             </select>
         </div>
-
         <button id="btn-regenerate" style="width: 100%; padding: 10px; background: #8b3a3a; color: white; border: none; cursor: pointer; font-weight: bold; margin-bottom: 10px;">Regenerate World</button>
         <button id="btn-resume" style="width: 100%; padding: 10px; background: #3d5c3d; color: white; border: none; cursor: pointer; font-weight: bold;">Resume Game</button>
+    </div>
+
+    <div id="crosshair" style="display: none; position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: white; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; mix-blend-mode: difference; z-index: 100;"></div>
+
+    <div id="scope-overlay">
+        <div id="scope-dot"></div>
     </div>
 
     <script type="importmap">
