@@ -15,7 +15,7 @@
         }
         #ui h1 { color: #ffdfbb; font-size: 3rem; margin: 0 0 10px 0; }
         #ui p { color: #aaa; margin: 5px 0; font-size: 1.1rem; }
-        
+
         /* NEW: WIDENED SNIPER SCOPE */
         #scope-overlay {
             display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -73,6 +73,17 @@
 
     <div id="scope-overlay">
         <div id="scope-dot"></div>
+    </div>
+
+    <div id="hud" style="display: none; position: absolute; top: 20px; left: 20px; color: white; font-family: monospace; font-size: 1.5rem; text-shadow: 2px 2px 0 #000; z-index: 50; pointer-events: none;">
+        <div id="scoreDisplay" style="color: #ffd700; margin-bottom: 5px;">Score: 0</div>
+        <div id="healthDisplay" style="color: #ff4444;">Health: 100</div>
+    </div>
+
+    <div id="death-screen" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(100, 0, 0, 0.8); z-index: 200; flex-direction: column; justify-content: center; align-items: center; color: white; font-family: monospace;">
+        <h1 style="font-size: 5rem; margin: 0; color: #ff5555;">YOU DIED</h1>
+        <h2 id="final-score" style="margin: 10px 0 30px 0; color: #ffd700;">Final Score: 0</h2>
+        <p>Refresh the page to try again.</p>
     </div>
 
     <script type="importmap">

@@ -10,17 +10,16 @@ export class Player {
         
         this.controls = new PointerLockControls(camera, domElement);
         this.crosshair = document.getElementById('crosshair'); 
-        this.scopeOverlay = document.getElementById('scope-overlay'); // Grab the new UI
+        this.scopeOverlay = document.getElementById('scope-overlay'); 
         
         uiElement.addEventListener('click', () => this.controls.lock());
         this.controls.addEventListener('lock', () => {
             uiElement.style.display = 'none';
-            // Only show hipfire crosshair if not zoomed in
             if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block'; 
         });
         this.controls.addEventListener('unlock', () => {
             this.crosshair.style.display = 'none'; 
-            this.scopeOverlay.style.display = 'none'; // Hide scope when paused
+            this.scopeOverlay.style.display = 'none'; 
         });
 
         this.velocity = new THREE.Vector3();
@@ -28,15 +27,38 @@ export class Player {
         this.moveState = { forward: false, backward: false, left: false, right: false, run: false };
         this.canJump = false;
 
-        // --- WEAPON SYSTEM ---
+        // --- NEW: PLAYER STATS ---
+        this.health = 100;
+        this.score = 0;
+        this.isDead = false;
+        
+        // Grab the UI elements
+        this.healthUI = document.getElementById('healthDisplay');
+        this.scoreUI = document.getElementById('scoreDisplay');
+        this.hud = document.getElementById('hud');
+        this.deathScreen = document.getElementById('death-screen');
+
+        // Show HUD when we lock in
+        this.controls.addEventListener('lock', () => {
+            uiElement.style.display = 'none';
+            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block'; 
+            if (!this.isDead) this.hud.style.display = 'block'; // Show HUD
+        });
+        this.controls.addEventListener('unlock', () => {
+            this.crosshair.style.display = 'none'; 
+            this.scopeOverlay.style.display = 'none'; 
+            this.hud.style.display = 'none'; // Hide HUD when paused
+        });
+
         this.raycaster = new THREE.Raycaster();
         this.weapons = [];
         this.currentWeaponIndex = 0;
         this.recoilOffset = 0; 
         
-        // --- NEW: SCOPE SYSTEM ---
+        // --- NEW: PROJECTILE ARRAY ---
+        this.projectiles = [];
+        
         this.baseFov = 75;
-        // The zoom levels: [1x (Hipfire), 4x, 6x, 8x]
         this.zoomLevels = [this.baseFov, this.baseFov / 4, this.baseFov / 6, this.baseFov / 8];
         this.currentZoomIndex = 0; 
 
@@ -49,21 +71,22 @@ export class Player {
         const gunMatWood = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 });
         const gunMatSilver = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.5 });
 
-        // 1. THE SNIPER (Primary)
+        // 1. THE SNIPER
         const sniperGroup = new THREE.Group();
         const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 1.5), gunMatDark); barrel.position.set(0, 0.1, -0.6);
         const stock = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.2, 0.8), gunMatWood); stock.position.set(0, 0, 0.4);
         const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.4, 8), gunMatDark); scope.rotation.x = Math.PI / 2; scope.position.set(0, 0.25, 0);
         sniperGroup.add(barrel, stock, scope);
         
-        // 2. THE DESERT EAGLE (Secondary)
+        // 2. THE DESERT EAGLE
         const deagleGroup = new THREE.Group();
         const slide = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.15, 0.6), gunMatSilver); slide.position.set(0, 0.2, -0.2);
         const grip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.2), gunMatDark); grip.rotation.x = 0.3; grip.position.set(0, -0.05, 0);
         deagleGroup.add(slide, grip);
 
-        sniperGroup.stats = { damage: 100, fireRate: 1.5, recoil: 0.4, name: 'Sniper' };
-        deagleGroup.stats = { damage: 35, fireRate: 0.3, recoil: 0.15, name: 'Deagle' };
+        // NEW: Added bulletSpeed and bulletDrop variables!
+        sniperGroup.stats = { damage: 100, fireRate: 1.5, recoil: 0.4, speed: 600, drop: 9.8, name: 'Sniper' };
+        deagleGroup.stats = { damage: 35, fireRate: 0.3, recoil: 0.15, speed: 200, drop: 15.0, name: 'Deagle' };
 
         this.weapons.push(sniperGroup, deagleGroup);
 
@@ -100,66 +123,45 @@ export class Player {
 
         document.addEventListener('mousedown', (e) => {
             if (!this.controls.isLocked) return;
-            
-            if (e.button === 0) {
-                // LEFT CLICK = Shoot
-                this.shoot();
-            } else if (e.button === 2) {
-                // RIGHT CLICK = Toggle Scope!
-                this.toggleScope();
-            }
+            if (e.button === 0) this.shoot();
+            else if (e.button === 2) this.toggleScope();
         });
     }
 
     switchWeapon(index) {
         if (this.currentWeaponIndex === index) return;
-        
-        // If we switch away from the Sniper, forcefully un-zoom!
         if (this.currentZoomIndex > 0) {
             this.currentZoomIndex = 0;
             this.applyZoom();
         }
-
         this.weapons.forEach((w, i) => w.visible = (i === index));
         this.currentWeaponIndex = index;
     }
 
-    // --- NEW: THE ZOOM LOGIC ---
     toggleScope() {
-        // Only the Sniper Rifle (Index 0) has a scope!
         if (this.currentWeaponIndex !== 0) return;
-
-        // Cycle through the zoom array: 0 -> 1 -> 2 -> 3 -> 0...
         this.currentZoomIndex++;
-        if (this.currentZoomIndex >= this.zoomLevels.length) {
-            this.currentZoomIndex = 0; 
-        }
-
+        if (this.currentZoomIndex >= this.zoomLevels.length) this.currentZoomIndex = 0; 
         this.applyZoom();
     }
 
     applyZoom() {
-        // 1. Change the Camera Lens (FOV)
         this.camera.fov = this.zoomLevels[this.currentZoomIndex];
         this.camera.updateProjectionMatrix();
-
-        // --- NEW: DYNAMIC MOUSE SMOOTHING (SENSITIVITY) ---
-        // If FOV is 75, speed is 1.0. If FOV is 18.75 (4x zoom), speed drops to 0.25!
         this.controls.pointerSpeed = this.camera.fov / this.baseFov;
 
         if (this.currentZoomIndex === 0) {
-            // UNZOOMED (Hipfire)
             this.crosshair.style.display = 'block';
             this.scopeOverlay.style.display = 'none';
-            this.weapons[0].visible = true; // Show the 3D gun model again
+            this.weapons[0].visible = true; 
         } else {
-            // ZOOMED IN
             this.crosshair.style.display = 'none';
             this.scopeOverlay.style.display = 'block';
-            this.weapons[0].visible = false; // Hide the 3D gun so it doesn't block the screen
+            this.weapons[0].visible = false; 
         }
     }
 
+    // --- UPGRADED: SPAWNS A PHYSICAL BULLET ---
     shoot() {
         if (!this.canShoot) return;
         const currentWeapon = this.weapons[this.currentWeaponIndex];
@@ -168,32 +170,117 @@ export class Player {
         this.canShoot = false;
         setTimeout(() => this.canShoot = true, currentWeapon.stats.fireRate * 1000);
 
-        this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
-        const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+        // Create the physical bullet
+        const bulletGeo = new THREE.SphereGeometry(0.2, 4, 4);
+        const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+        const bullet = new THREE.Mesh(bulletGeo, bulletMat);
 
-        for (let i = 0; i < intersects.length; i++) {
-            const hitObject = intersects[i].object;
-            if (hitObject.animalRef) {
-                hitObject.animalRef.takeDamage(currentWeapon.stats.damage);
-                break; 
-            }
+        // Start it at the camera
+        bullet.position.copy(this.camera.position);
+
+        // Get the direction we are looking
+        const aimDir = new THREE.Vector3();
+        this.camera.getWorldDirection(aimDir);
+
+        // Give it velocity based on the gun's stats
+        bullet.velocity = aimDir.multiplyScalar(currentWeapon.stats.speed);
+        bullet.damage = currentWeapon.stats.damage;
+        bullet.gravityDrop = currentWeapon.stats.drop;
+        bullet.life = 3.0; // Lives for 3 seconds max
+
+        this.scene.add(bullet);
+        this.projectiles.push(bullet);
+    }
+
+    // --- NEW: COMBAT FUNCTIONS ---
+    addScore(points) {
+        if (this.isDead) return;
+        this.score += points;
+        this.scoreUI.innerText = `Score: ${this.score}`;
+    }
+
+    takeDamage(amount) {
+        if (this.isDead) return;
+        this.health -= amount;
+        this.healthUI.innerText = `Health: ${this.health}`;
+
+        // Screen flash red effect
+        const flash = document.createElement('div');
+        flash.style.position = 'absolute';
+        flash.style.top = '0'; flash.style.left = '0'; flash.style.width = '100%'; flash.style.height = '100%';
+        flash.style.background = 'rgba(255, 0, 0, 0.4)'; flash.style.pointerEvents = 'none'; flash.style.zIndex = '150';
+        document.body.appendChild(flash);
+        setTimeout(() => document.body.removeChild(flash), 150);
+
+        // Check for Death
+        if (this.health <= 0) {
+            this.isDead = true;
+            this.health = 0;
+            this.healthUI.innerText = `Health: 0`;
+            this.controls.unlock();
+            
+            // Show Death Screen
+            document.getElementById('ui').style.display = 'none';
+            document.getElementById('settingsMenu').style.display = 'none';
+            this.hud.style.display = 'none';
+            this.deathScreen.style.display = 'flex';
+            document.getElementById('final-score').innerText = `Final Score: ${this.score}`;
         }
     }
 
     update(delta) {
         if (!this.controls.isLocked) return;
 
+        // --- NEW: PROJECTILE PHYSICS LOOP ---
+        for (let i = this.projectiles.length - 1; i >= 0; i--) {
+            const p = this.projectiles[i];
+            
+            p.life -= delta;
+            if (p.life <= 0) {
+                this.scene.remove(p);
+                this.projectiles.splice(i, 1);
+                continue;
+            }
+
+            // 1. Apply Gravity Drop
+            p.velocity.y -= p.gravityDrop * delta;
+
+            // 2. Continuous Collision Detection (CCD)
+            const oldPos = p.position.clone();
+            const moveStep = p.velocity.clone().multiplyScalar(delta);
+            const dist = moveStep.length();
+            const dir = moveStep.clone().normalize();
+
+            this.raycaster.set(oldPos, dir);
+            // Check against animals, terrain, houses, etc.
+            const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+
+            if (intersects.length > 0 && intersects[0].distance <= dist) {
+                // Hit something!
+                const hitObject = intersects[0].object;
+                if (hitObject.animalRef) {
+                    hitObject.animalRef.takeDamage(p.damage);
+                }
+                
+                // Destroy bullet on impact
+                this.scene.remove(p);
+                this.projectiles.splice(i, 1);
+                continue;
+            }
+
+            // 3. Move bullet if no collision
+            p.position.add(moveStep);
+        }
+
+        // --- WEAPON RECOIL ---
         if (this.recoilOffset > 0) {
             this.recoilOffset -= delta * 2;
             if (this.recoilOffset < 0) this.recoilOffset = 0;
         }
-        
-        // Only apply recoil rotation if the gun is actually visible (not scoped in)
         const activeWeapon = this.weapons[this.currentWeaponIndex];
-        if (activeWeapon.visible) {
-            activeWeapon.rotation.x = this.recoilOffset;
-        }
+        if (activeWeapon.visible) activeWeapon.rotation.x = this.recoilOffset;
         
+        // --- MOVEMENT PHYSICS ---
         this.velocity.x -= this.velocity.x * 10.0 * delta;
         this.velocity.z -= this.velocity.z * 10.0 * delta;
         this.velocity.y -= 9.8 * 6.0 * delta; 

@@ -7,13 +7,14 @@ export class Animal {
         this.mesh = new THREE.Group();
         this.mesh.position.set(x, y, z);
         
-        // NEW: Tag the group so the Raycaster knows it's an animal
         this.mesh.isAnimal = true; 
-        this.mesh.animalRef = this; // Points back to this class
+        this.mesh.animalRef = this; 
 
         // AI & Health State
         this.health = type === 'bear' ? 200 : (type === 'camel' ? 100 : 50);
         this.isDead = false;
+        this.deathTimer = 3.0; // How long the body stays on the ground
+        this.isDisposed = false;
         
         this.target = new THREE.Vector3(x, y, z);
         this.speed = type === 'deer' ? 8 : (type === 'camel' ? 5 : 6);
@@ -37,7 +38,6 @@ export class Animal {
             part.position.set(px, py, pz);
             part.castShadow = true;
             part.receiveShadow = true;
-            // NEW: Point the individual body parts back to the main class so hitboxes work
             part.animalRef = this; 
             this.mesh.add(part);
         };
@@ -48,7 +48,7 @@ export class Animal {
             const leg = new THREE.Mesh(geo, mat);
             leg.position.set(px, py, pz);
             leg.castShadow = true; leg.receiveShadow = true;
-            leg.animalRef = this; // NEW: Hitbox tag
+            leg.animalRef = this; 
             this.mesh.add(leg);
             this.legs.push(leg); 
         };
@@ -70,12 +70,11 @@ export class Animal {
         }
     }
 
-    // --- NEW: DAMAGE SYSTEM ---
     takeDamage(amount) {
         if (this.isDead) return;
         this.health -= amount;
         
-        // Flash red when hit
+        // Flash red
         this.mesh.children.forEach(child => {
             if (child.material && child.material.color) {
                 const originalHex = child.material.color.getHex();
@@ -85,17 +84,18 @@ export class Animal {
         });
 
         if (this.health <= 0) {
+            // Trigger the death state! The update loop will handle the falling animation.
             this.isDead = true;
-            // Knock them over!
-            this.mesh.rotation.z = Math.PI / 2;
-            this.mesh.position.y -= 1; 
-            
-            // Delete the body after 3 seconds
-            setTimeout(() => this.dispose(), 3000);
+
+            if (player) {
+                if (this.type === 'deer') player.addScore(10);
+                if (this.type === 'camel') player.addScore(25);
+                if (this.type === 'bear') player.addScore(100);
+            }
         } else {
-            // Flee mechanics! Run away randomly when shot.
+            // Panic behavior
             this.state = 'wandering';
-            this.speed *= 2; // Panic sprint
+            this.speed *= 2; 
             this.timer = 3;
             const angle = Math.random() * Math.PI * 2;
             this.target.set(this.mesh.position.x + Math.cos(angle) * 50, 0, this.mesh.position.z + Math.sin(angle) * 50);
@@ -103,11 +103,31 @@ export class Animal {
     }
 
     update(delta, getTerrainHeight) {
-        if (this.isDead) return; // Dead animals don't walk!
+        if (this.isDisposed) return;
 
+        // --- NEW: THE FALLING SEQUENCE ---
+        if (this.isDead) {
+            // 1. Smoothly tip over to 90 degrees (Math.PI / 2) on the Z axis
+            const targetRotation = Math.PI / 2;
+            this.mesh.rotation.z += (targetRotation - this.mesh.rotation.z) * 4 * delta;
+            
+            // 2. Lower them slightly so they look like they are resting flat on the ground
+            const groundY = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
+            const targetY = groundY - 0.8; // Shift down slightly
+            this.mesh.position.y += (targetY - this.mesh.position.y) * 4 * delta;
+
+            // 3. Count down and despawn
+            this.deathTimer -= delta;
+            if (this.deathTimer <= 0) {
+                this.dispose();
+            }
+            return; // Stop the rest of the AI from running
+        }
+
+        // --- NORMAL AI ---
         this.timer -= delta;
         if (this.timer <= 0) {
-            this.speed = this.type === 'deer' ? 8 : (this.type === 'camel' ? 5 : 6); // Reset speed from panic
+            this.speed = this.type === 'deer' ? 8 : (this.type === 'camel' ? 5 : 6); 
             if (this.state === 'idle') {
                 this.state = 'wandering';
                 this.timer = 2 + Math.random() * 4; 
@@ -145,6 +165,8 @@ export class Animal {
     }
 
     dispose() {
+        if (this.isDisposed) return;
+        this.isDisposed = true;
         this.scene.remove(this.mesh);
         this.mesh.children.forEach(child => {
             if (child.geometry) child.geometry.dispose();
