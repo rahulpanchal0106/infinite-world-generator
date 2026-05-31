@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createNoise2D } from 'simplex-noise';
-
+import { Animal } from './entities.js'; // <--- NEW IMPORT
 const noise2D = createNoise2D();
 
 export function getBiomeData(x, z) {
@@ -75,13 +75,13 @@ const floorMat = new THREE.MeshStandardMaterial({ color: 0x3d2817, flatShading: 
 
 // --- 4. THE CHUNK CLASS ---
 class Chunk {
-    constructor(chunkX, chunkZ, scene) {
+   constructor(chunkX, chunkZ, scene) {
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
         this.scene = scene;
         this.meshes = []; 
         this.obstacles = []; 
-
+        this.animals = [];
         this.buildTerrain();
         this.buildWorld(); 
     }
@@ -294,6 +294,26 @@ class Chunk {
         meshesToAdd.forEach(mesh => {
             if (mesh) { this.scene.add(mesh); this.meshes.push(mesh); }
         });
+
+        // --- NEW: ANIMAL SPAWNING ---
+        // Spawn 0 to 4 animals randomly per chunk
+        const animalCount = Math.floor(Math.random() * 5); 
+        for(let i = 0; i < animalCount; i++) {
+            const ax = (Math.random() - 0.5) * chunkSize + offsetX;
+            const az = (Math.random() - 0.5) * chunkSize + offsetZ;
+            const ay = getTerrainHeight(ax, az);
+            
+            // Only spawn on dry land, not too steep
+            const slope = Math.abs(getTerrainHeight(ax + 1, az) - ay);
+            if (ay > 28 && slope < 0.5) {
+                const { temp } = getBiomeData(ax, az);
+                let type = 'deer'; // Default temperate
+                if (temp > 0.65) type = 'camel'; // Desert
+                else if (temp < 0.35) type = 'bear'; // Tundra
+                
+                this.animals.push(new Animal(type, ax, ay, az, this.scene));
+            }
+        }
     }
 
     dispose() {
@@ -302,6 +322,8 @@ class Chunk {
             else if (mesh.geometry) mesh.geometry.dispose(); 
             this.scene.remove(mesh);
         });
+        // Delete animals!
+        this.animals.forEach(animal => animal.dispose()); 
     }
 }
 
@@ -358,6 +380,12 @@ export class ChunkManager {
                 chunk.dispose();
                 this.chunks.delete(key);
             }
+        }
+    }
+    // Add this right below the ChunkManager update() function
+    updateEntities(delta, getTerrainHeightFunc) {
+        for (const chunk of this.chunks.values()) {
+            chunk.animals.forEach(animal => animal.update(delta, getTerrainHeightFunc));
         }
     }
 
