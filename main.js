@@ -35,7 +35,13 @@ const environment = new DynamicEnvironment(scene, { dayDurationSeconds: 60, clou
 const chunkManager = new ChunkManager(scene);
 
 const uiElement = document.getElementById('ui');
-const player = new Player(camera, document.body, uiElement, getTerrainHeight);
+const player = new Player(
+    camera, 
+    document.body, 
+    uiElement, 
+    getTerrainHeight, 
+    (x, z, r) => chunkManager.checkCollision(x, z, r) // Pass collision logic
+);
 
 camera.position.set(0, getTerrainHeight(0, 0) + 5, 0);
 
