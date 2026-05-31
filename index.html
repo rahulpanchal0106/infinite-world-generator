@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimalist Mountain Adventurer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; }
+        canvas { display: block; }
+        #ui {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center; color: white; font-family: monospace;
+            background: rgba(0,0,0,0.5); padding: 20px; border-radius: 8px; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h2>Click to Explore</h2>
+        <p>WASD to Move | SHIFT to Sprint | SPACE to Jump</p>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "simplex-noise": "https://unpkg.com/simplex-noise@4.0.1/dist/esm/simplex-noise.js"
+            }
+        }
+    </script>
+    
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
