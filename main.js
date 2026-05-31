@@ -48,7 +48,7 @@ function animate() {
     const time = performance.now();
     const delta = (time - prevTime) / 1000;
 
-    environment.update(delta);
+   environment.update(delta, camera.position);
     player.update(delta);
     
     // TELL THE WORLD WHERE THE PLAYER IS
