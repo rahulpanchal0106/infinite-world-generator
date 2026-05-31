@@ -3,6 +3,7 @@ import { createNoise2D } from 'simplex-noise';
 
 const noise2D = createNoise2D();
 
+// --- 1. TERRAIN MATH ---
 export function getTerrainHeight(x, z) {
     let y = 0;
     let n1 = noise2D(x * 0.001, z * 0.001) * 0.5 + 0.5;
@@ -17,14 +18,14 @@ export function getTerrainHeight(x, z) {
 
 const chunkSize = 400; 
 const chunkResolution = 50; 
-
 const terrainMaterial = new THREE.MeshStandardMaterial({ color: 0x3d5c3d, roughness: 1.0 });
 
-const trunkGeo = new THREE.CylinderGeometry(0.5, 0.8, 4, 5);
-const leavesGeo = new THREE.ConeGeometry(3, 8, 5);
-trunkGeo.translate(0, 2, 0); 
-leavesGeo.translate(0, 7, 0); 
-
+// --- 2. NATURE GEOMETRIES & MATERIALS ---
+const trunkGeo = new THREE.CylinderGeometry(1.0, 1.6, 8, 5); 
+const leavesGeo = new THREE.ConeGeometry(6, 16, 5);
+trunkGeo.translate(0, 4, 0); 
+// Shift leaves up to rest on the taller trunk (with a little overlap)
+leavesGeo.translate(0, 14, 0);
 const bushGeo = new THREE.IcosahedronGeometry(2, 0);
 bushGeo.translate(0, 1.5, 0);
 const rockGeo = new THREE.DodecahedronGeometry(1.5, 0);
@@ -34,16 +35,22 @@ const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2b4222, flatShading:
 const bushMat = new THREE.MeshStandardMaterial({ color: 0x34542a, flatShading: true });
 const rockMat = new THREE.MeshStandardMaterial({ color: 0x666666, flatShading: true, roughness: 0.9 });
 
+// --- 3. ARCHITECTURE MATERIALS ---
+const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8e5d1, flatShading: true }); // Warmer, rustic plaster
+const roofMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, flatShading: true }); // Dark wood shingle color
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x3d2817, flatShading: true }); // Dark floor
+
+// --- 4. THE CHUNK CLASS ---
 class Chunk {
     constructor(chunkX, chunkZ, scene) {
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
         this.scene = scene;
         this.meshes = []; 
-        this.obstacles = []; // NEW: Store invisible collision cylinders here!
+        this.obstacles = []; 
 
         this.buildTerrain();
-        this.buildEcosystem(); 
+        this.buildWorld(); 
     }
 
     buildTerrain() {
@@ -60,23 +67,107 @@ class Chunk {
         geometry.computeVertexNormals(); 
         const terrain = new THREE.Mesh(geometry, terrainMaterial);
         terrain.position.set(offsetX, 0, offsetZ);
+        
         terrain.receiveShadow = true; 
+        terrain.castShadow = true; // <--- ADD THIS BRAND NEW LINE
         
         this.scene.add(terrain);
         this.meshes.push(terrain);
     }
+    // --- UPGRADED: DETAILED, GROUNDED CABIN ---
+    buildHollowCabin(gx, gy, gz, rotationAngle) {
+        const cabinGroup = new THREE.Group();
+        
+        // NEW DIMENSIONS: Smaller footprint, deep foundations
+        const wallThickness = 0.8;
+        const width = 10;
+        const depth = 10;
+        const visibleHeight = 7;
+        const foundationDepth = 4; // Pushes 4 units underground to hide slopes
+        const totalHeight = visibleHeight + foundationDepth;
+        const doorWidth = 3;
+        const doorHeight = 5; 
 
-    buildEcosystem() {
-        const maxTrees = 150; 
-        const maxBushes = 200;
-        const maxRocks = 80;
+        // Center offset so the foundation sinks into the ground
+        const yOffset = (totalHeight / 2) - foundationDepth;
+
+        // 1. THE WALLS
+        const backWall = new THREE.Mesh(new THREE.BoxGeometry(width, totalHeight, wallThickness), wallMat);
+        backWall.position.set(0, yOffset, -depth/2);
         
-        const treeData = [];
-        const bushData = [];
-        const rockData = [];
+        const leftWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, totalHeight, depth), wallMat);
+        leftWall.position.set(-width/2, yOffset, 0);
         
+        const rightWall = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, totalHeight, depth), wallMat);
+        rightWall.position.set(width/2, yOffset, 0);
+
+        // Front wall split into 3 pieces (Left, Right, and Header above the door)
+        const frontWallWidth = (width - doorWidth) / 2;
+        const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(frontWallWidth, totalHeight, wallThickness), wallMat);
+        frontLeft.position.set(-width/2 + frontWallWidth/2, yOffset, depth/2);
+        
+        const frontRight = new THREE.Mesh(new THREE.BoxGeometry(frontWallWidth, totalHeight, wallThickness), wallMat);
+        frontRight.position.set(width/2 - frontWallWidth/2, yOffset, depth/2);
+
+        const headerHeight = totalHeight - (doorHeight + foundationDepth);
+        const frontHeader = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, headerHeight, wallThickness), wallMat);
+        frontHeader.position.set(0, totalHeight - headerHeight/2 - foundationDepth, depth/2);
+
+        // 2. TIMBER FRAME CORNER PILLARS (Hides the ugly seams!)
+        const pillarGeo = new THREE.BoxGeometry(1.2, totalHeight + 0.5, 1.2);
+        const p1 = new THREE.Mesh(pillarGeo, trunkMat); p1.position.set(-width/2, yOffset, -depth/2);
+        const p2 = new THREE.Mesh(pillarGeo, trunkMat); p2.position.set(width/2, yOffset, -depth/2);
+        const p3 = new THREE.Mesh(pillarGeo, trunkMat); p3.position.set(-width/2, yOffset, depth/2);
+        const p4 = new THREE.Mesh(pillarGeo, trunkMat); p4.position.set(width/2, yOffset, depth/2);
+
+        // 3. FLOOR & ROOF
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(width - 1.5, depth - 1.5), floorMat);
+        floor.rotateX(-Math.PI / 2);
+        floor.position.set(0, 0.2, 0); // Sits just slightly above the grass
+
+        // Roof is now wider than the house (radius 8 vs width 10) to create overhangs
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(8.5, 5, 4), roofMat);
+        roof.rotateY(Math.PI / 4);
+        roof.position.set(0, visibleHeight + 2.5, 0); 
+
+        // Add everything to the group
+        [backWall, leftWall, rightWall, frontLeft, frontRight, frontHeader, p1, p2, p3, p4, floor, roof].forEach(m => {
+            m.castShadow = true;
+            m.receiveShadow = true;
+            cabinGroup.add(m);
+        });
+
+        cabinGroup.position.set(gx, gy, gz);
+        cabinGroup.rotation.y = rotationAngle;
+        
+        this.scene.add(cabinGroup);
+        this.meshes.push(cabinGroup);
+
+        // 4. PHYSICS COLLISIONS
+        cabinGroup.updateMatrixWorld(true);
+
+        const addWallCollision = (mesh) => {
+            const box = new THREE.Box3().setFromObject(mesh);
+            this.obstacles.push({
+                type: 'box',
+                minX: box.min.x, maxX: box.max.x,
+                minZ: box.min.z, maxZ: box.max.z
+            });
+        };
+
+        // We only add collision to the ground-level walls, leaving the door open
+        addWallCollision(backWall);
+        addWallCollision(leftWall);
+        addWallCollision(rightWall);
+        addWallCollision(frontLeft);
+        addWallCollision(frontRight);
+    }
+
+    buildWorld() {
+        const treeData = [], bushData = [], rockData = [];
         const offsetX = this.chunkX * chunkSize;
         const offsetZ = this.chunkZ * chunkSize;
+        const houseLocations = []; 
 
         for(let i = 0; i < 4000; i++) {
             const lx = (Math.random() - 0.5) * chunkSize; 
@@ -84,38 +175,56 @@ class Chunk {
             const gx = lx + offsetX; 
             const gz = lz + offsetZ; 
             const gy = getTerrainHeight(gx, gz);
-
             const gyNext = getTerrainHeight(gx + 1, gz);
             const slope = Math.abs(gyNext - gy);
 
             const moisture = noise2D(gx * 0.002 + 10000, gz * 0.002 + 10000) * 0.5 + 0.5;
             const treeLine = 40 + (moisture * 160); 
+            const townNoise = noise2D(gx * 0.0003 - 5000, gz * 0.0003 - 5000) * 0.5 + 0.5;
 
             if (gy > 26) { 
                 const rand = Math.random();
-                if (slope < 0.8 && gy < treeLine) {
-                    if (rand < 0.05 && treeData.length < maxTrees) {
-                        treeData.push({ lx, gy, lz });
-                        // NEW: Add to collision map! (Radius 1.2)
-                        this.obstacles.push({ x: gx, z: gz, r: 1.2 });
+                let insideHouseRadius = false;
+
+                houseLocations.forEach(h => {
+                    const dx = gx - h.x; const dz = gz - h.z;
+                    if (dx*dx + dz*dz < 250) insideHouseRadius = true; // Reduced clearance for smaller houses
+                });
+                
+                if (townNoise > 0.92 && slope < 0.25 && gy < 80) {
+                    if (rand < 0.15 && !insideHouseRadius && houseLocations.length < 15) {
+                        const streetRotation = Math.floor(Math.random() * 4) * (Math.PI / 2);
+                        this.buildHollowCabin(gx, gy, gz, streetRotation);
+                        houseLocations.push({x: gx, z: gz});
+                        insideHouseRadius = true; 
                     }
-                    else if (rand < 0.15 && bushData.length < maxBushes) bushData.push({ lx, gy, lz }); // Bushes have no collision
+                } 
+                
+                if (!insideHouseRadius) {
+                    const isTownZone = townNoise > 0.92;
+                    const treeChance = isTownZone ? 0.01 : 0.05; 
+
+                    if (slope < 0.8 && gy < treeLine) {
+                        if (rand < treeChance && treeData.length < 150) {
+                            treeData.push({ lx, gy, lz });
+                            this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 1.2 });
+                        }
+                        else if (rand < 0.15 && bushData.length < 200) bushData.push({ lx, gy, lz });
+                    }
                 }
-                if (rand > 0.95 && rockData.length < maxRocks) {
+                
+                if (rand > 0.95 && rockData.length < 80 && !insideHouseRadius) {
                     rockData.push({ lx, gy, lz });
-                    // NEW: Add to collision map! (Radius 2.0)
-                    this.obstacles.push({ x: gx, z: gz, r: 2.0 });
+                    this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.0 });
                 }
             }
         }
 
         const dummyMatrix = new THREE.Object3D();
-
         const buildInstanced = (geo, mat, data, castShadow, scaleVariance) => {
             if (data.length === 0) return null;
             const mesh = new THREE.InstancedMesh(geo, mat, data.length);
-            mesh.castShadow = castShadow; 
-            mesh.receiveShadow = true;
+            mesh.castShadow = castShadow; mesh.receiveShadow = true;
             mesh.position.set(offsetX, 0, offsetZ);
             
             data.forEach((pos, index) => {
@@ -129,12 +238,14 @@ class Chunk {
             return mesh;
         };
 
-        const trunkMesh = buildInstanced(trunkGeo, trunkMat, treeData, true, {min: 0.7, range: 0.8});
-        const leavesMesh = buildInstanced(leavesGeo, leavesMat, treeData, true, {min: 0.7, range: 0.8});
-        const bushes = buildInstanced(bushGeo, bushMat, bushData, false, {min: 0.3, range: 0.7});
-        const rocks = buildInstanced(rockGeo, rockMat, rockData, true, {min: 0.5, range: 1.5});
+        const meshesToAdd = [
+            buildInstanced(trunkGeo, trunkMat, treeData, true, {min: 0.7, range: 0.8}),
+            buildInstanced(leavesGeo, leavesMat, treeData, true, {min: 0.7, range: 0.8}),
+            buildInstanced(bushGeo, bushMat, bushData, false, {min: 0.3, range: 0.7}),
+            buildInstanced(rockGeo, rockMat, rockData, true, {min: 0.5, range: 1.5})
+        ];
 
-        [trunkMesh, leavesMesh, bushes, rocks].forEach(mesh => {
+        meshesToAdd.forEach(mesh => {
             if (mesh) {
                 this.scene.add(mesh);
                 this.meshes.push(mesh);
@@ -144,10 +255,40 @@ class Chunk {
 
     dispose() {
         this.meshes.forEach(mesh => {
+            if (mesh.isGroup) {
+                mesh.children.forEach(child => {
+                    if (child.geometry) child.geometry.dispose();
+                });
+            } else if (mesh.geometry) {
+                mesh.geometry.dispose(); 
+            }
             this.scene.remove(mesh);
-            mesh.geometry.dispose(); 
         });
     }
+}
+
+export function findTownSpawn() {
+    let searchRadius = 0;
+    const step = 40; 
+    while (searchRadius < 20000) {
+        const circumference = Math.max(1, 2 * Math.PI * searchRadius);
+        const angleStep = step / circumference; 
+        for (let angle = 0; angle < Math.PI * 2; angle += Math.max(angleStep, 0.1)) {
+            const gx = searchRadius * Math.cos(angle);
+            const gz = searchRadius * Math.sin(angle);
+            const townNoise = noise2D(gx * 0.0003 - 5000, gz * 0.0003 - 5000) * 0.5 + 0.5;
+            
+            if (townNoise > 0.92) {
+                const gy = getTerrainHeight(gx, gz);
+                if (gy > 26 && gy < 80) {
+                    const gyNext = getTerrainHeight(gx + 1, gz);
+                    if (Math.abs(gyNext - gy) < 0.25) return { x: gx, y: gy + 5, z: gz }; 
+                }
+            }
+        }
+        searchRadius += step;
+    }
+    return { x: 0, y: getTerrainHeight(0, 0) + 5, z: 0 };
 }
 
 export class ChunkManager {
@@ -183,15 +324,24 @@ export class ChunkManager {
         }
     }
 
-    // NEW: Ask all active chunks if the player is hitting an obstacle!
     checkCollision(px, pz, radius) {
         for (const chunk of this.chunks.values()) {
             for (const obs of chunk.obstacles) {
-                const dx = px - obs.x;
-                const dz = pz - obs.z;
-                // Pythagoras: A^2 + B^2 = C^2. If distance squared is less than radii squared, it's a hit!
-                if (dx * dx + dz * dz < (obs.r + radius) * (obs.r + radius)) {
-                    return true;
+                
+                if (obs.type === 'circle') {
+                    const dx = px - obs.x;
+                    const dz = pz - obs.z;
+                    if (dx * dx + dz * dz < (obs.r + radius) * (obs.r + radius)) return true;
+                } 
+                
+                else if (obs.type === 'box') {
+                    const closestX = Math.max(obs.minX, Math.min(px, obs.maxX));
+                    const closestZ = Math.max(obs.minZ, Math.min(pz, obs.maxZ));
+                    
+                    const dx = px - closestX;
+                    const dz = pz - closestZ;
+                    
+                    if (dx * dx + dz * dz < radius * radius) return true;
                 }
             }
         }

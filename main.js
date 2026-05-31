@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import DynamicEnvironment from './environment.js';
-import { ChunkManager, getTerrainHeight } from './terrain.js';
 import { Player } from './player.js';
+// Change your terrain import to this:
+import { ChunkManager, getTerrainHeight, findTownSpawn } from './terrain.js';
 
 // 1. Core Setup
 const scene = new THREE.Scene();
@@ -43,8 +44,9 @@ const player = new Player(
     (x, z, r) => chunkManager.checkCollision(x, z, r) // Pass collision logic
 );
 
-camera.position.set(0, getTerrainHeight(0, 0) + 5, 0);
-
+const spawnPoint = findTownSpawn();
+camera.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z); // camera.position.set(0, getTerrainHeight(0, 0) + 5, 0);
+chunkManager.update(camera.position);
 // 3. Render Loop
 let prevTime = performance.now();
 
