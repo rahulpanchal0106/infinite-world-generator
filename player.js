@@ -259,7 +259,7 @@ export class Player {
                 // Hit something!
                 const hitObject = intersects[0].object;
                 if (hitObject.animalRef) {
-                    hitObject.animalRef.takeDamage(p.damage);
+                    hitObject.animalRef.takeDamage(p.damage, this);
                 }
                 
                 // Destroy bullet on impact

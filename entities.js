@@ -70,7 +70,8 @@ export class Animal {
         }
     }
 
-    takeDamage(amount) {
+    // THE FIX: Properly linked player argument for the score!
+    takeDamage(amount, player) {
         if (this.isDead) return;
         this.health -= amount;
         
@@ -84,9 +85,9 @@ export class Animal {
         });
 
         if (this.health <= 0) {
-            // Trigger the death state! The update loop will handle the falling animation.
             this.isDead = true;
-
+            
+            // Give points to the HUD!
             if (player) {
                 if (this.type === 'deer') player.addScore(10);
                 if (this.type === 'camel') player.addScore(25);
@@ -102,31 +103,47 @@ export class Animal {
         }
     }
 
-    update(delta, getTerrainHeight) {
+    update(delta, getTerrainHeight, player) {
         if (this.isDisposed) return;
 
-        // --- NEW: THE FALLING SEQUENCE ---
+        // Falling Sequence
         if (this.isDead) {
-            // 1. Smoothly tip over to 90 degrees (Math.PI / 2) on the Z axis
             const targetRotation = Math.PI / 2;
             this.mesh.rotation.z += (targetRotation - this.mesh.rotation.z) * 4 * delta;
             
-            // 2. Lower them slightly so they look like they are resting flat on the ground
             const groundY = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
-            const targetY = groundY - 0.8; // Shift down slightly
-            this.mesh.position.y += (targetY - this.mesh.position.y) * 4 * delta;
+            this.mesh.position.y += ((groundY - 0.8) - this.mesh.position.y) * 4 * delta;
 
-            // 3. Count down and despawn
             this.deathTimer -= delta;
-            if (this.deathTimer <= 0) {
-                this.dispose();
-            }
-            return; // Stop the rest of the AI from running
+            if (this.deathTimer <= 0) this.dispose();
+            
+            return; 
         }
 
-        // --- NORMAL AI ---
         this.timer -= delta;
-        if (this.timer <= 0) {
+
+        // HOSTILE AI FOR BEARS
+        let isChasing = false;
+        if (this.type === 'bear' && player && !player.isDead) {
+            const dx = player.camera.position.x - this.mesh.position.x;
+            const dz = player.camera.position.z - this.mesh.position.z;
+            const distanceToPlayer = Math.sqrt(dx*dx + dz*dz);
+
+            if (distanceToPlayer < 40) {
+                isChasing = true;
+                this.state = 'chasing';
+                this.speed = 14; 
+                this.target.set(player.camera.position.x, 0, player.camera.position.z);
+
+                if (distanceToPlayer < 3.5 && this.timer <= 0) {
+                    player.takeDamage(25); 
+                    this.timer = 1.0; 
+                }
+            }
+        }
+
+        // NORMAL AI 
+        if (!isChasing && this.timer <= 0) {
             this.speed = this.type === 'deer' ? 8 : (this.type === 'camel' ? 5 : 6); 
             if (this.state === 'idle') {
                 this.state = 'wandering';
@@ -139,8 +156,9 @@ export class Animal {
             }
         }
 
+        // MOVEMENT LOGIC
         let isMoving = false;
-        if (this.state === 'wandering') {
+        if (this.state === 'wandering' || this.state === 'chasing') {
             const dx = this.target.x - this.mesh.position.x; const dz = this.target.z - this.mesh.position.z;
             const dist = Math.sqrt(dx*dx + dz*dz);
             if (dist > 1) {
