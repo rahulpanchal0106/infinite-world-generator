@@ -6,14 +6,12 @@ export class Animal {
         this.scene = scene;
         this.mesh = new THREE.Group();
         this.mesh.position.set(x, y, z);
-        
         this.mesh.isAnimal = true; 
         this.mesh.animalRef = this; 
 
-        // AI & Health State
         this.health = type === 'bear' ? 200 : (type === 'camel' ? 100 : 50);
         this.isDead = false;
-        this.deathTimer = 3.0; // How long the body stays on the ground
+        this.deathTimer = 3.0; 
         this.isDisposed = false;
         
         this.target = new THREE.Vector3(x, y, z);
@@ -34,30 +32,21 @@ export class Animal {
         const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, flatShading: true });
 
         const addPart = (geo, mat, px, py, pz) => {
-            const part = new THREE.Mesh(geo, mat);
-            part.position.set(px, py, pz);
-            part.castShadow = true;
-            part.receiveShadow = true;
-            part.animalRef = this; 
+            const part = new THREE.Mesh(geo, mat); part.position.set(px, py, pz);
+            part.castShadow = true; part.receiveShadow = true; part.animalRef = this; 
             this.mesh.add(part);
         };
 
         const addLeg = (width, height, depth, mat, px, py, pz) => {
-            const geo = new THREE.BoxGeometry(width, height, depth);
-            geo.translate(0, -height / 2, 0); 
-            const leg = new THREE.Mesh(geo, mat);
-            leg.position.set(px, py, pz);
-            leg.castShadow = true; leg.receiveShadow = true;
-            leg.animalRef = this; 
-            this.mesh.add(leg);
-            this.legs.push(leg); 
+            const geo = new THREE.BoxGeometry(width, height, depth); geo.translate(0, -height / 2, 0); 
+            const leg = new THREE.Mesh(geo, mat); leg.position.set(px, py, pz);
+            leg.castShadow = true; leg.receiveShadow = true; leg.animalRef = this; 
+            this.mesh.add(leg); this.legs.push(leg); 
         };
 
         if (this.type === 'deer') {
             addLeg(0.4, 2.5, 0.4, darkMat, -0.5, 2.5, 1.0); addLeg(0.4, 2.5, 0.4, darkMat, 0.5, 2.5, 1.0); addLeg(0.4, 2.5, 0.4, darkMat, -0.5, 2.5, -1.0); addLeg(0.4, 2.5, 0.4, darkMat, 0.5, 2.5, -1.0);
-            addPart(new THREE.BoxGeometry(1.5, 1.5, 3), deerMat, 0, 3, 0); 
-            addPart(new THREE.BoxGeometry(0.8, 2, 0.8), deerMat, 0, 4.5, 1.2); 
-            addPart(new THREE.BoxGeometry(1, 1, 1.5), deerMat, 0, 5.2, 1.8); 
+            addPart(new THREE.BoxGeometry(1.5, 1.5, 3), deerMat, 0, 3, 0); addPart(new THREE.BoxGeometry(0.8, 2, 0.8), deerMat, 0, 4.5, 1.2); addPart(new THREE.BoxGeometry(1, 1, 1.5), deerMat, 0, 5.2, 1.8); 
             addPart(new THREE.BoxGeometry(0.2, 1.5, 0.2), darkMat, -0.4, 6.0, 1.5); addPart(new THREE.BoxGeometry(0.2, 1.5, 0.2), darkMat, 0.4, 6.0, 1.5);
         } 
         else if (this.type === 'camel') {
@@ -70,12 +59,10 @@ export class Animal {
         }
     }
 
-    // THE FIX: Properly linked player argument for the score!
     takeDamage(amount, player) {
         if (this.isDead) return;
         this.health -= amount;
         
-        // Flash red
         this.mesh.children.forEach(child => {
             if (child.material && child.material.color) {
                 const originalHex = child.material.color.getHex();
@@ -86,18 +73,13 @@ export class Animal {
 
         if (this.health <= 0) {
             this.isDead = true;
-            
-            // Give points to the HUD!
             if (player) {
                 if (this.type === 'deer') player.addScore(10);
                 if (this.type === 'camel') player.addScore(25);
                 if (this.type === 'bear') player.addScore(100);
             }
         } else {
-            // Panic behavior
-            this.state = 'wandering';
-            this.speed *= 2; 
-            this.timer = 3;
+            this.state = 'wandering'; this.speed *= 2; this.timer = 3;
             const angle = Math.random() * Math.PI * 2;
             this.target.set(this.mesh.position.x + Math.cos(angle) * 50, 0, this.mesh.position.z + Math.sin(angle) * 50);
         }
@@ -106,57 +88,38 @@ export class Animal {
     update(delta, getTerrainHeight, player) {
         if (this.isDisposed) return;
 
-        // Falling Sequence
         if (this.isDead) {
             const targetRotation = Math.PI / 2;
             this.mesh.rotation.z += (targetRotation - this.mesh.rotation.z) * 4 * delta;
-            
             const groundY = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
             this.mesh.position.y += ((groundY - 0.8) - this.mesh.position.y) * 4 * delta;
-
             this.deathTimer -= delta;
             if (this.deathTimer <= 0) this.dispose();
-            
             return; 
         }
 
         this.timer -= delta;
-
-        // HOSTILE AI FOR BEARS
         let isChasing = false;
+        
         if (this.type === 'bear' && player && !player.isDead) {
-            const dx = player.camera.position.x - this.mesh.position.x;
-            const dz = player.camera.position.z - this.mesh.position.z;
+            const dx = player.camera.position.x - this.mesh.position.x; const dz = player.camera.position.z - this.mesh.position.z;
             const distanceToPlayer = Math.sqrt(dx*dx + dz*dz);
-
             if (distanceToPlayer < 40) {
-                isChasing = true;
-                this.state = 'chasing';
-                this.speed = 14; 
+                isChasing = true; this.state = 'chasing'; this.speed = 14; 
                 this.target.set(player.camera.position.x, 0, player.camera.position.z);
-
-                if (distanceToPlayer < 3.5 && this.timer <= 0) {
-                    player.takeDamage(25); 
-                    this.timer = 1.0; 
-                }
+                if (distanceToPlayer < 3.5 && this.timer <= 0) { player.takeDamage(25); this.timer = 1.0; }
             }
         }
 
-        // NORMAL AI 
         if (!isChasing && this.timer <= 0) {
             this.speed = this.type === 'deer' ? 8 : (this.type === 'camel' ? 5 : 6); 
             if (this.state === 'idle') {
-                this.state = 'wandering';
-                this.timer = 2 + Math.random() * 4; 
+                this.state = 'wandering'; this.timer = 2 + Math.random() * 4; 
                 const angle = Math.random() * Math.PI * 2;
                 this.target.set(this.mesh.position.x + Math.cos(angle) * 20, 0, this.mesh.position.z + Math.sin(angle) * 20);
-            } else {
-                this.state = 'idle';
-                this.timer = 1 + Math.random() * 4; 
-            }
+            } else { this.state = 'idle'; this.timer = 1 + Math.random() * 4; }
         }
 
-        // MOVEMENT LOGIC
         let isMoving = false;
         if (this.state === 'wandering' || this.state === 'chasing') {
             const dx = this.target.x - this.mesh.position.x; const dz = this.target.z - this.mesh.position.z;
@@ -166,29 +129,86 @@ export class Animal {
                 this.mesh.position.x += (dx / dist) * this.speed * delta;
                 this.mesh.position.z += (dz / dist) * this.speed * delta;
                 this.mesh.rotation.y += (Math.atan2(dx, dz) - this.mesh.rotation.y) * 5 * delta;
-                
-                this.walkCycle += delta * this.speed * 1.5;
-                const swing = Math.sin(this.walkCycle) * 0.6; 
-                this.legs[0].rotation.x = swing; this.legs[1].rotation.x = -swing; 
-                this.legs[2].rotation.x = -swing; this.legs[3].rotation.x = swing; 
+                this.walkCycle += delta * this.speed * 1.5; const swing = Math.sin(this.walkCycle) * 0.6; 
+                this.legs[0].rotation.x = swing; this.legs[1].rotation.x = -swing; this.legs[2].rotation.x = -swing; this.legs[3].rotation.x = swing; 
             }
         }
-
-        if (!isMoving) {
-            this.walkCycle = 0;
-            this.legs.forEach(leg => leg.rotation.x += (0 - leg.rotation.x) * 10 * delta);
-        }
-
+        if (!isMoving) { this.walkCycle = 0; this.legs.forEach(leg => leg.rotation.x += (0 - leg.rotation.x) * 10 * delta); }
         this.mesh.position.y = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
     }
 
     dispose() {
         if (this.isDisposed) return;
-        this.isDisposed = true;
-        this.scene.remove(this.mesh);
-        this.mesh.children.forEach(child => {
-            if (child.geometry) child.geometry.dispose();
-            if (child.material) child.material.dispose();
-        });
+        this.isDisposed = true; this.scene.remove(this.mesh);
+        this.mesh.children.forEach(child => { if (child.geometry) child.geometry.dispose(); if (child.material) child.material.dispose(); });
+    }
+}
+
+// --- NEW: THE INSTANT-MERGE BASE ---
+export class PlayerBase {
+    constructor(x, y, z, scene) {
+        this.scene = scene;
+        this.mesh = new THREE.Group();
+        this.mesh.position.set(x, y, z);
+        this.mesh.isPlayerBase = true;
+        this.mesh.baseRef = this;
+        this.level = 1;
+        this.buildModel();
+        this.scene.add(this.mesh);
+    }
+
+    buildModel() {
+        while(this.mesh.children.length > 0){ 
+            const child = this.mesh.children[0];
+            this.mesh.remove(child); 
+            if(child.geometry) child.geometry.dispose();
+            if(child.material) child.material.dispose();
+        }
+
+        const addPart = (geo, color, px, py, pz) => {
+            const mat = new THREE.MeshStandardMaterial({ color: color, flatShading: true });
+            const part = new THREE.Mesh(geo, mat);
+            part.position.set(px, py, pz);
+            part.castShadow = true; part.receiveShadow = true;
+            part.baseRef = this; 
+            this.mesh.add(part);
+        };
+
+        if (this.level === 1) {
+            addPart(new THREE.BoxGeometry(6, 0.5, 6), 0x555555, 0, 0.25, 0); 
+            addPart(new THREE.BoxGeometry(5, 5, 5), 0x8b5a2b, 0, 3, 0);      
+            addPart(new THREE.BoxGeometry(6, 2, 6), 0x3d2314, 0, 6, 0);      
+        } 
+        else if (this.level === 2) {
+            addPart(new THREE.BoxGeometry(10, 1, 10), 0x444444, 0, 0.5, 0);  
+            addPart(new THREE.BoxGeometry(9, 8, 9), 0x888888, 0, 5, 0);      
+            addPart(new THREE.BoxGeometry(10, 2, 10), 0x222222, 0, 10, 0);     
+            addPart(new THREE.BoxGeometry(12, 3, 1), 0x8b5a2b, 0, 1.5, 5.5); 
+            addPart(new THREE.BoxGeometry(12, 3, 1), 0x8b5a2b, 0, 1.5, -5.5);
+        }
+        else if (this.level === 3) {
+            addPart(new THREE.BoxGeometry(16, 2, 16), 0x222222, 0, 1, 0);    
+            addPart(new THREE.BoxGeometry(12, 12, 12), 0xaaaaaa, 0, 8, 0);   
+            addPart(new THREE.BoxGeometry(14, 4, 14), 0x00ffaa, 0, 15, 0);   
+            addPart(new THREE.BoxGeometry(3, 16, 3), 0x555555, 7, 8, 7); 
+            addPart(new THREE.BoxGeometry(3, 16, 3), 0x555555, -7, 8, 7);
+            addPart(new THREE.BoxGeometry(3, 16, 3), 0x555555, 7, 8, -7);
+            addPart(new THREE.BoxGeometry(3, 16, 3), 0x555555, -7, 8, -7);
+        }
+
+        this.mesh.scale.set(0.1, 0.1, 0.1);
+        const popInterval = setInterval(() => {
+            this.mesh.scale.x += (1.0 - this.mesh.scale.x) * 0.4;
+            this.mesh.scale.y += (1.0 - this.mesh.scale.y) * 0.4;
+            this.mesh.scale.z += (1.0 - this.mesh.scale.z) * 0.4;
+            if (this.mesh.scale.x > 0.99) clearInterval(popInterval);
+        }, 16);
+    }
+
+    upgrade() {
+        if (this.level >= 3) return false; 
+        this.level++;
+        this.buildModel();
+        return true;
     }
 }
