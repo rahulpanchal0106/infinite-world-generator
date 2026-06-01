@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createNoise2D } from 'simplex-noise';
-import { Animal } from './entities.js'; // <--- NEW IMPORT
 const noise2D = createNoise2D();
+import { Animal, PlayerBase, Monster } from './entities.js';
 
 export function getBiomeData(x, z) {
     const seed = window.GameSettings ? window.GameSettings.worldSeedOffset : 0;
@@ -82,6 +82,7 @@ class Chunk {
         this.meshes = []; 
         this.obstacles = []; 
         this.animals = [];
+        this.monsters = [];
         this.buildTerrain();
         this.buildWorld(); 
     }
@@ -314,6 +315,16 @@ class Chunk {
                 this.animals.push(new Animal(type, ax, ay, az, this.scene));
             }
         }
+
+        const monsterCount = Math.floor(Math.random() * 2); // 0 or 1 monster per chunk
+     for(let i = 0; i < monsterCount; i++) {
+         const mx = (Math.random() - 0.5) * chunkSize + offsetX;
+         const mz = (Math.random() - 0.5) * chunkSize + offsetZ;
+         const my = getTerrainHeight(mx, mz);
+         if (my > 22) { // Only spawn on dry land
+             this.monsters.push(new Monster(mx, my, mz, this.scene));
+         }
+     }
     }
 
     dispose() {
@@ -324,6 +335,7 @@ class Chunk {
         });
         // Delete animals!
         this.animals.forEach(animal => animal.dispose()); 
+        this.monsters.forEach(monster => monster.dispose());
     }
 }
 
@@ -383,11 +395,12 @@ export class ChunkManager {
         }
     }
     // Add this right below the ChunkManager update() function
-    updateEntities(delta, getTerrainHeightFunc) {
-        for (const chunk of this.chunks.values()) {
-            chunk.animals.forEach(animal => animal.update(delta, getTerrainHeightFunc));
-        }
-    }
+    updateEntities(delta, getTerrainHeightFunc, player) {
+     for (const chunk of this.chunks.values()) {
+         chunk.animals.forEach(animal => animal.update(delta, getTerrainHeightFunc, player));
+         chunk.monsters.forEach(monster => monster.update(delta, getTerrainHeightFunc, player)); // <--- ADD THIS
+     }
+ }
 
     checkCollision(px, pz, radius) {
         for (const chunk of this.chunks.values()) {

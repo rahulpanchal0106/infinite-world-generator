@@ -212,3 +212,122 @@ export class PlayerBase {
         return true;
     }
 }
+
+// --- UPGRADED: VOID BEHEMOTH MONSTER ---
+// --- UPGRADED: VOID BEHEMOTH MONSTER ---
+// --- UPGRADED: VOID BEHEMOTH MONSTER ---
+export class Monster {
+    constructor(x, y, z, scene) {
+        this.scene = scene;
+        this.mesh = new THREE.Group();
+        this.mesh.position.set(x, y, z);
+        
+        this.mesh.isMonster = true; 
+        this.mesh.monsterRef = this; 
+
+        this.health = 250; 
+        this.isDead = false;
+        this.speed = 14; 
+        this.attackTimer = 0;
+        this.walkCycle = 0; 
+
+        this.buildModel();
+        this.scene.add(this.mesh);
+    }
+
+    buildModel() {
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x110a1f, flatShading: true, roughness: 0.8 });
+        const eyeMat = new THREE.MeshStandardMaterial({ color: 0x9900ff, emissive: 0x9900ff, emissiveIntensity: 2 });
+        const spikeMat = new THREE.MeshStandardMaterial({ color: 0x000000, flatShading: true });
+
+        const addPart = (geo, mat, px, py, pz) => {
+            const part = new THREE.Mesh(geo, mat); part.position.set(px, py, pz);
+            part.castShadow = true; part.receiveShadow = true; part.monsterRef = this; 
+            this.mesh.add(part); return part;
+        };
+
+        const torso = addPart(new THREE.BoxGeometry(3, 4, 4), bodyMat, 0, 3.5, 0); torso.rotation.x = Math.PI / 6;
+        addPart(new THREE.BoxGeometry(1.5, 1.5, 2), bodyMat, 0, 4.5, 2.5);
+        addPart(new THREE.BoxGeometry(0.3, 0.3, 0.1), eyeMat, -0.4, 4.6, 3.55); 
+        addPart(new THREE.BoxGeometry(0.3, 0.3, 0.1), eyeMat, 0.4, 4.6, 3.55); 
+        addPart(new THREE.ConeGeometry(0.6, 2, 4), spikeMat, 0, 5.8, -0.5);
+        addPart(new THREE.ConeGeometry(0.5, 1.5, 4), spikeMat, 0, 5, -1.5);
+
+        this.leftArm = addPart(new THREE.BoxGeometry(1.2, 4, 1.2), bodyMat, -2.2, 2.5, 1.5);
+        this.rightArm = addPart(new THREE.BoxGeometry(1.2, 4, 1.2), bodyMat, 2.2, 2.5, 1.5);
+        this.leftLeg = addPart(new THREE.BoxGeometry(1.2, 2, 1.2), bodyMat, -1, 1, -1);
+        this.rightLeg = addPart(new THREE.BoxGeometry(1.2, 2, 1.2), bodyMat, 1, 1, -1);
+    }
+
+    takeDamage(amount, player) {
+        if (this.isDead) return;
+        this.health -= amount;
+        
+        this.mesh.children.forEach(child => {
+            if (child.material && child.material.color) {
+                const orig = child.material.color.getHex();
+                child.material.color.setHex(0xffffff);
+                setTimeout(() => { if (!this.isDead && child.material) child.material.color.setHex(orig); }, 100);
+            }
+        });
+
+        if (this.health <= 0) {
+            this.isDead = true;
+            if (player) player.addScore(150); 
+            this.mesh.rotation.x = -Math.PI / 2; this.mesh.position.y -= 1;
+            setTimeout(() => this.dispose(), 3000); 
+        }
+    }
+
+    update(delta, getTerrainHeight, player) {
+        if (this.isDead) return;
+
+        let isMoving = false;
+
+        if (player && !player.isDead) {
+            const dx = player.camera.position.x - this.mesh.position.x;
+            const dz = player.camera.position.z - this.mesh.position.z;
+            const distance = Math.sqrt(dx*dx + dz*dz);
+
+            if (distance < 60) {
+                // THE FIX: Stop moving if they get too close to prevent clipping inside the player!
+                if (distance > 4.5) {
+                    isMoving = true;
+                    this.mesh.position.x += (dx / distance) * this.speed * delta;
+                    this.mesh.position.z += (dz / distance) * this.speed * delta;
+                }
+                
+                this.mesh.rotation.y = Math.atan2(dx, dz);
+
+                // The attack triggers from 5.5 units away! (Slightly beside you)
+                if (distance < 5.5) {
+                    this.attackTimer += delta;
+                    if (this.attackTimer > 0.8) { 
+                        // THE FIX: Pass this.mesh.position so the player knows where they got hit from!
+                        player.takeDamage(25, this.mesh.position); 
+                        this.attackTimer = 0;
+                    }
+                } else {
+                    this.attackTimer = 0;
+                }
+            }
+        }
+
+        if (isMoving) {
+            this.walkCycle += delta * this.speed * 1.5;
+            const swing = Math.sin(this.walkCycle) * 1.2;
+            this.leftArm.position.z = 1.5 + swing; this.rightArm.position.z = 1.5 - swing;
+            this.leftLeg.position.z = -1 - swing; this.rightLeg.position.z = -1 + swing;
+        }
+
+        this.mesh.position.y = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
+    }
+
+    dispose() {
+        this.scene.remove(this.mesh);
+        this.mesh.children.forEach(child => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+        });
+    }
+}

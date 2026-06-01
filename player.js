@@ -27,7 +27,9 @@ export class Player {
             this.hud.style.display = 'none'; this.hotbar.style.display = 'none'; 
         });
 
-        this.velocity = new THREE.Vector3(); this.direction = new THREE.Vector3();
+        this.velocity = new THREE.Vector3(); 
+        this.direction = new THREE.Vector3();
+        this.knockbackVelocity = new THREE.Vector3(); // NEW: KNOCKBACK VARIABLE!
         this.moveState = { forward: false, backward: false, left: false, right: false, run: false };
         this.canJump = false;
 
@@ -83,7 +85,7 @@ export class Player {
             if (e.code === 'KeyA') this.moveState.left = true;
             if (e.code === 'KeyD') this.moveState.right = true;
             if (e.code === 'ShiftLeft') this.moveState.run = true;
-            if (e.code === 'Space' && this.canJump) this.velocity.y += 25; 
+            if (e.code === 'Space' && this.canJump) this.velocity.y += 15; 
             
             if (e.code === 'Digit1') this.switchWeapon(0); 
             if (e.code === 'Digit2') this.switchWeapon(1); 
@@ -135,7 +137,8 @@ export class Player {
         this.score += points; this.scoreUI.innerText = `Score: ${this.score}`;
     }
 
-    takeDamage(amount) {
+    // THE FIX: takeDamage now accepts the Monster's Location to calculate the push direction
+    takeDamage(amount, attackerPos = null) {
         if (this.isDead) return;
         this.health -= amount; this.healthUI.innerText = `Health: ${this.health}`;
         const flash = document.createElement('div');
@@ -143,6 +146,22 @@ export class Player {
         flash.style.background = 'rgba(255, 0, 0, 0.4)'; flash.style.pointerEvents = 'none'; flash.style.zIndex = '150';
         document.body.appendChild(flash);
         setTimeout(() => document.body.removeChild(flash), 150);
+
+        // --- NEW: THE KNOCKBACK LAUNCH ---
+        if (attackerPos) {
+            // Find direction AWAY from the monster
+            const dx = this.camera.position.x - attackerPos.x;
+            const dz = this.camera.position.z - attackerPos.z;
+            const dist = Math.sqrt(dx*dx + dz*dz);
+            
+            if (dist > 0) {
+                // Shove the player 80 units backwards and 25 units up!
+                this.knockbackVelocity.x = (dx / dist) * 80;
+                this.knockbackVelocity.z = (dz / dist) * 80;
+                this.velocity.y = 25; 
+                this.canJump = false; // Disable normal jumping while airborne
+            }
+        }
 
         if (this.health <= 0) {
             this.isDead = true; this.health = 0; this.healthUI.innerText = `Health: 0`; this.controls.unlock();
@@ -195,14 +214,26 @@ export class Player {
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
             const p = this.projectiles[i]; p.life -= delta;
             if (p.life <= 0) { this.scene.remove(p); this.projectiles.splice(i, 1); continue; }
+            
             p.velocity.y -= p.gravityDrop * delta;
-            const oldPos = p.position.clone(); const moveStep = p.velocity.clone().multiplyScalar(delta);
-            const dist = moveStep.length(); const dir = moveStep.clone().normalize();
+            const oldPos = p.position.clone(); 
+            const moveStep = p.velocity.clone().multiplyScalar(delta);
+            const dist = moveStep.length(); 
+            const dir = moveStep.clone().normalize();
+            
             this.raycaster.set(oldPos, dir);
             const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+            
             if (intersects.length > 0 && intersects[0].distance <= dist) {
                 const hitObject = intersects[0].object;
-                if (hitObject.animalRef) hitObject.animalRef.takeDamage(p.damage, this);
+                
+                let currentCheck = hitObject;
+                while (currentCheck) {
+                    if (currentCheck.animalRef) { currentCheck.animalRef.takeDamage(p.damage, this); break; }
+                    if (currentCheck.monsterRef) { currentCheck.monsterRef.takeDamage(p.damage, this); break; }
+                    currentCheck = currentCheck.parent;
+                }
+                
                 this.scene.remove(p); this.projectiles.splice(i, 1); continue;
             }
             p.position.add(moveStep);
@@ -212,8 +243,18 @@ export class Player {
         const activeWeapon = this.weapons[this.currentWeaponIndex];
         if (activeWeapon.visible) activeWeapon.rotation.x = this.recoilOffset;
         
-        this.velocity.x -= this.velocity.x * 10.0 * delta; this.velocity.z -= this.velocity.z * 10.0 * delta; this.velocity.y -= 9.8 * 6.0 * delta; 
-        this.direction.z = Number(this.moveState.forward) - Number(this.moveState.backward); this.direction.x = Number(this.moveState.right) - Number(this.moveState.left); this.direction.normalize();
+        // --- Normal Movement & Gravity ---
+        this.velocity.x -= this.velocity.x * 10.0 * delta; 
+        this.velocity.z -= this.velocity.z * 10.0 * delta; 
+        this.velocity.y -= 9.8 * 6.0 * delta; 
+
+        // --- NEW: Knockback Sliding Friction ---
+        this.knockbackVelocity.x -= this.knockbackVelocity.x * 5.0 * delta; 
+        this.knockbackVelocity.z -= this.knockbackVelocity.z * 5.0 * delta; 
+        
+        this.direction.z = Number(this.moveState.forward) - Number(this.moveState.backward); 
+        this.direction.x = Number(this.moveState.right) - Number(this.moveState.left); 
+        this.direction.normalize();
 
         const speed = this.moveState.run ? 150.0 : 50.0;
         if (this.moveState.forward || this.moveState.backward) this.velocity.z -= this.direction.z * speed * delta;
@@ -221,6 +262,11 @@ export class Player {
 
         const oldX = this.camera.position.x; const oldZ = this.camera.position.z;
         this.controls.moveRight(-this.velocity.x * delta); this.controls.moveForward(-this.velocity.z * delta);
+        
+        // --- NEW: Apply World-Space Knockback Force ---
+        this.camera.position.x += this.knockbackVelocity.x * delta;
+        this.camera.position.z += this.knockbackVelocity.z * delta;
+
         const newX = this.camera.position.x; const newZ = this.camera.position.z; const playerRadius = 1.0;
 
         let hitWall = this.checkCollision(newX, newZ, playerRadius);
@@ -245,8 +291,8 @@ export class Player {
             }
         }
         
-        if (this.camera.position.y < floorHeight + 12.0) { 
-            this.velocity.y = 0; this.camera.position.y = floorHeight + 12.0; this.canJump = true; 
+        if (this.camera.position.y < floorHeight + 3.0) { 
+            this.velocity.y = 0; this.camera.position.y = floorHeight + 3.0; this.canJump = true; 
         } else { this.canJump = false; }
     }
 }

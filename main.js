@@ -98,7 +98,7 @@ function animate() {
     chunkManager.update(camera.position);
     
     // --- NEW: RUN ANIMAL AI ---
-    chunkManager.updateEntities(delta, getTerrainHeight); 
+    chunkManager.updateEntities(delta, getTerrainHeight, player);
     
     ocean.position.x = camera.position.x;
     ocean.position.z = camera.position.z;
