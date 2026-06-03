@@ -36,7 +36,9 @@ export class Player {
         this.health = 100; this.score = 0; this.isDead = false;
         this.healthUI = document.getElementById('healthDisplay'); this.scoreUI = document.getElementById('scoreDisplay');
 
-        this.raycaster = new THREE.Raycaster(); this.weapons = []; this.projectiles = [];
+        this.raycaster = new THREE.Raycaster();
+        this.raycaster.layers.set(0); // layer 0 only — ignores weapons (layer 1)
+        this.weapons = []; this.projectiles = [];
         this.currentWeaponIndex = 0; this.recoilOffset = 0; 
         this.placedBlocks = []; 
         
@@ -73,8 +75,16 @@ export class Player {
         hammerGroup.stats = { fireRate: 0.3, recoil: 0.2, type: 'tool' };
 
         this.weapons.push(sniperGroup, deagleGroup, hammerGroup);
-        this.weapons.forEach((w, index) => { w.position.set(0.4, -0.3, -0.6); w.visible = index === 0; this.camera.add(w); });
-        this.scene.add(this.camera); this.canShoot = true;
+        this.weapons.forEach((w, index) => {
+            w.position.set(0.4, -0.3, -0.6);
+            w.visible = index === 0;
+            // Put all weapon parts on layer 1 so the raycaster never hits them
+            w.traverse(child => { if (child.isMesh) child.layers.set(1); });
+            this.camera.add(w);
+        });
+        this.scene.add(this.camera);
+        this.camera.layers.enable(1); // camera sees layer 0 (world) + layer 1 (weapons); raycaster sees layer 0 only
+        this.canShoot = true;
     }
 
     initEventListeners() {
@@ -174,7 +184,7 @@ export class Player {
     shoot() {
         if (!this.canShoot || this.isDead) return;
         const currentWeapon = this.weapons[this.currentWeaponIndex];
-        
+
         this.recoilOffset = currentWeapon.stats.recoil;
         this.canShoot = false;
         setTimeout(() => this.canShoot = true, currentWeapon.stats.fireRate * 1000);
@@ -182,61 +192,87 @@ export class Player {
         if (currentWeapon.stats.type === 'tool') {
             this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
             const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-            
             if (intersects.length > 0 && intersects[0].distance < 40) {
                 const hit = intersects[0];
                 const baseRef = hit.object.baseRef;
-
                 if (baseRef) {
                     baseRef.upgrade();
                 } else {
                     const hitPos = hit.point;
-                    hitPos.y = this.getTerrainHeight(hitPos.x, hitPos.z); 
+                    hitPos.y = this.getTerrainHeight(hitPos.x, hitPos.z);
                     const newBase = new PlayerBase(hitPos.x, hitPos.y, hitPos.z, this.scene);
                     this.placedBlocks.push(newBase);
                 }
             }
         } else {
-            const bulletGeo = new THREE.SphereGeometry(0.2, 4, 4);
-            const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
-            const bullet = new THREE.Mesh(bulletGeo, bulletMat);
-            bullet.position.copy(this.camera.position);
-            const aimDir = new THREE.Vector3(); this.camera.getWorldDirection(aimDir);
-            bullet.velocity = aimDir.multiplyScalar(currentWeapon.stats.speed);
-            bullet.damage = currentWeapon.stats.damage; bullet.gravityDrop = currentWeapon.stats.drop; bullet.life = 3.0; 
-            this.scene.add(bullet); this.projectiles.push(bullet);
+            const aimDir = new THREE.Vector3();
+            this.camera.getWorldDirection(aimDir);
+
+            // ── Instant hitscan (damage registered the moment you fire) ──
+            // Standard FPS approach — no terrain blocking, lag-free, reliable.
+            this.raycaster.set(this.camera.position, aimDir);
+            const hits = this.raycaster.intersectObjects(this.scene.children, true);
+
+            for (const hit of hits) {
+                let cur = hit.object;
+                let entityHit = false;
+                while (cur) {
+                    if (cur.remotePlayerRef) {
+                        cur.remotePlayerRef.flash();
+                        if (this.onRemotePlayerHit) this.onRemotePlayerHit(cur.remotePlayerRef, currentWeapon.stats.damage);
+                        entityHit = true; break;
+                    }
+                    if (cur.animalRef)  { cur.animalRef.takeDamage(currentWeapon.stats.damage, this);  entityHit = true; break; }
+                    if (cur.monsterRef) { cur.monsterRef.takeDamage(currentWeapon.stats.damage, this); entityHit = true; break; }
+                    cur = cur.parent;
+                }
+                if (entityHit) break;
+                if (hit.object.isMesh) break; // hit solid world geometry — stop here
+            }
+
+            // Broadcast shot so other clients can show the tracer + muzzle flash
+            if (this.onShot) {
+                const pos = this.camera.position;
+                this.onShot(pos.x, pos.y, pos.z, aimDir.x, aimDir.y, aimDir.z,
+                            currentWeapon.stats.speed, currentWeapon.stats.drop);
+            }
+
+            // ── Visual tracer bullet (cosmetic only, no damage) ──
+            this._spawnTracer(this.camera.position, aimDir,
+                              currentWeapon.stats.speed, currentWeapon.stats.drop);
         }
+    }
+
+    // Shared tracer spawner — used for local shots and remote shots
+    _spawnTracer(origin, dir, speed, drop) {
+        const bullet = new THREE.Mesh(
+            new THREE.SphereGeometry(0.15, 4, 4),
+            new THREE.MeshBasicMaterial({ color: 0xffdd00 })
+        );
+        bullet.position.copy(origin).addScaledVector(dir, 2.0);
+        bullet.velocity    = dir.clone().multiplyScalar(speed);
+        bullet.gravityDrop = drop;
+        bullet.life        = 1.5;
+        this.scene.add(bullet);
+        this.projectiles.push(bullet);
     }
 
     update(delta) {
         if (!this.controls.isLocked || this.isDead) return;
 
+        // Tracer bullets — visual only, damage was dealt instantly on fire
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
-            const p = this.projectiles[i]; p.life -= delta;
-            if (p.life <= 0) { this.scene.remove(p); this.projectiles.splice(i, 1); continue; }
-            
-            p.velocity.y -= p.gravityDrop * delta;
-            const oldPos = p.position.clone(); 
-            const moveStep = p.velocity.clone().multiplyScalar(delta);
-            const dist = moveStep.length(); 
-            const dir = moveStep.clone().normalize();
-            
-            this.raycaster.set(oldPos, dir);
-            const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-            
-            if (intersects.length > 0 && intersects[0].distance <= dist) {
-                const hitObject = intersects[0].object;
-                
-                let currentCheck = hitObject;
-                while (currentCheck) {
-                    if (currentCheck.animalRef) { currentCheck.animalRef.takeDamage(p.damage, this); break; }
-                    if (currentCheck.monsterRef) { currentCheck.monsterRef.takeDamage(p.damage, this); break; }
-                    currentCheck = currentCheck.parent;
-                }
-                
-                this.scene.remove(p); this.projectiles.splice(i, 1); continue;
+            const p = this.projectiles[i];
+            p.life -= delta;
+            if (p.life <= 0) {
+                this.scene.remove(p);
+                p.geometry.dispose();
+                p.material.dispose();
+                this.projectiles.splice(i, 1);
+                continue;
             }
-            p.position.add(moveStep);
+            p.velocity.y -= p.gravityDrop * delta;
+            p.position.addScaledVector(p.velocity, delta);
         }
 
         if (this.recoilOffset > 0) { this.recoilOffset -= delta * 2; if (this.recoilOffset < 0) this.recoilOffset = 0; }

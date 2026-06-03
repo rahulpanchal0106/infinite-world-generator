@@ -57,6 +57,7 @@ class DynamicEnvironment {
         const geometry = new THREE.SphereGeometry(4000, 32, 32); 
         const material = new THREE.MeshBasicMaterial({ color: 0x87CEEB, side: THREE.BackSide });
         this.skyMesh = new THREE.Mesh(geometry, material);
+        this.skyMesh.layers.set(1);
         this.scene.add(this.skyMesh);
 
         const starsGeometry = new THREE.BufferGeometry();
@@ -76,16 +77,19 @@ class DynamicEnvironment {
         
         this.starsMaterial = new THREE.PointsMaterial({ size: 6, color: 0xffffff, transparent: true, opacity: 0, fog: false });
         this.starsMesh = new THREE.Points(starsGeometry, this.starsMaterial);
+        this.starsMesh.layers.set(1);
         this.scene.add(this.starsMesh);
 
         const sunGeo = new THREE.IcosahedronGeometry(150, 3);
         const sunMat = new THREE.MeshBasicMaterial({ color: 0xffffee, fog: false });
         this.sunMesh = new THREE.Mesh(sunGeo, sunMat);
+        this.sunMesh.layers.set(1);
         this.scene.add(this.sunMesh);
 
         const moonGeo = new THREE.IcosahedronGeometry(80, 2);
         const moonMat = new THREE.MeshBasicMaterial({ color: 0xc4d1ff, fog: false });
         this.moonMesh = new THREE.Mesh(moonGeo, moonMat);
+        this.moonMesh.layers.set(1);
         this.scene.add(this.moonMesh);
     }
 
@@ -122,6 +126,7 @@ class DynamicEnvironment {
                     Math.random() * (40 * scaleMultiplier), 
                     (Math.random() - 0.5) * spread
                 );
+                puff.layers.set(1); // invisible to raycaster
                 puff.castShadow = true;
                 puff.receiveShadow = true;
                 cloudGroup.add(puff);

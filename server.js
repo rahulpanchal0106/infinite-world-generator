@@ -1,14 +1,80 @@
-// Simple WebSocket game server for infinite-world-generator multiplayer.
+// Game server — serves static files AND handles WebSocket on the same port.
+// One port = one ngrok tunnel covers everything.
 // Run with:  node server.js
 // Requires:  npm install ws
 
+const http = require('http');
+const fs   = require('fs');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 
-const PORT    = 3000;
-const wss     = new WebSocketServer({ port: PORT });
-const players = new Map(); // id → { ws, state }
+const PORT = 3000;
 
-console.log(`[Server] Listening on ws://localhost:${PORT}`);
+const MIME = {
+    '.html': 'text/html',
+    '.js':   'application/javascript',
+    '.css':  'text/css',
+    '.json': 'application/json',
+    '.png':  'image/png',
+    '.jpg':  'image/jpeg',
+    '.ico':  'image/x-icon',
+};
+
+// ── Static file server ──────────────────────────────────────────────────────
+const httpServer = http.createServer((req, res) => {
+    // strip query strings, default to index.html
+    const urlPath = req.url.split('?')[0];
+    const filePath = path.join(__dirname, urlPath === '/' ? 'index.html' : urlPath);
+    const ext = path.extname(filePath).toLowerCase();
+
+    fs.readFile(filePath, (err, data) => {
+        if (err) { res.writeHead(404); res.end('Not found'); return; }
+        res.writeHead(200, { 'Content-Type': MIME[ext] || 'text/plain' });
+        res.end(data);
+    });
+});
+
+// ── Game state ───────────────────────────────────────────────────────────────
+const game = {
+    seed:       Math.floor(Math.random() * 100000),
+    alivePlayers: new Set(),   // ids of players currently alive
+    resetting:  false,
+    resetTimer: null,
+};
+
+function checkAllDead() {
+    if (game.resetting) return;
+    if (players.size === 0) return;
+    // Are there any alive players?
+    const anyAlive = [...game.alivePlayers].some(id => players.has(id));
+    if (anyAlive) return;
+
+    // Everyone is dead — countdown then new game
+    game.resetting = true;
+    console.log('[Game] All players dead — new game in 5s');
+    broadcast({ type: 'game_countdown', seconds: 5 });
+
+    let remaining = 5;
+    game.resetTimer = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+            broadcast({ type: 'game_countdown', seconds: remaining });
+        } else {
+            clearInterval(game.resetTimer);
+            game.seed      = Math.floor(Math.random() * 100000);
+            game.resetting = false;
+            game.alivePlayers.clear();
+            // All connected players are considered alive again after reset
+            players.forEach((_, id) => game.alivePlayers.add(id));
+            console.log(`[Game] New game — seed ${game.seed}`);
+            broadcast({ type: 'game_reset', seed: game.seed });
+        }
+    }, 1000);
+}
+
+// ── WebSocket server on the same HTTP server ────────────────────────────────
+const wss     = new WebSocketServer({ server: httpServer });
+const players = new Map(); // id → { ws, state }
 
 wss.on('connection', (ws) => {
     let playerId = null;
@@ -21,17 +87,20 @@ wss.on('connection', (ws) => {
 
             case 'join': {
                 playerId = msg.id;
-                players.set(playerId, { ws, state: { id: playerId, x: 0, y: 0, z: 0, rotY: 0 } });
-                console.log(`[+] ${playerId.slice(0,8)} joined  (${players.size} online)`);
+                const playerName = (msg.name ?? '').trim() || `Player_${msg.id.slice(0, 4)}`;
+                players.set(playerId, { ws, state: { id: playerId, name: playerName, x: 0, y: 0, z: 0, rotY: 0, isDead: false } });
+                game.alivePlayers.add(playerId); // new joiner counts as alive
+                console.log(`[+] ${playerName} joined  (${players.size} online, seed ${game.seed})`);
 
-                // Tell this new player about everyone already in the game
+                // Send new player: everyone already here + current game seed
                 const snapshot = [...players.values()]
                     .filter(p => p.state.id !== playerId)
                     .map(p => p.state);
                 send(ws, { type: 'snapshot', players: snapshot });
+                send(ws, { type: 'game_info', seed: game.seed });
 
-                // Tell everyone else a new player joined
-                broadcast({ type: 'join', id: playerId }, playerId);
+                // Tell everyone else
+                broadcast({ type: 'join', id: playerId, name: playerName }, playerId);
                 break;
             }
 
@@ -39,27 +108,38 @@ wss.on('connection', (ws) => {
                 if (!playerId) return;
                 const p = players.get(playerId);
                 if (!p) return;
-                // Update stored state
+                const wasDead = p.state.isDead;
                 Object.assign(p.state, {
-                    id: playerId,
-                    x: msg.x, y: msg.y, z: msg.z,
-                    rotY: msg.rotY,
+                    id:     playerId,
+                    name:   (msg.name ?? '').trim() || p.state.name,
+                    x:      msg.x, y: msg.y, z: msg.z,
+                    rotY:   msg.rotY,
                     health: msg.health,
+                    isDead: !!msg.isDead,
                     weapon: msg.weapon,
                 });
-                // Relay to all other players
+
+                // Track alive/dead transitions
+                if (msg.isDead) {
+                    game.alivePlayers.delete(playerId);
+                    if (!wasDead) {
+                        console.log(`[~] ${p.state.name} died  (${game.alivePlayers.size} alive)`);
+                        checkAllDead();
+                    }
+                } else {
+                    game.alivePlayers.add(playerId);
+                }
+
                 broadcast({ type: 'state', ...p.state }, playerId);
                 break;
             }
 
             case 'shot': {
-                // Relay to everyone — clients do their own hit detection
                 broadcast({ type: 'shot', id: playerId, ...msg }, playerId);
                 break;
             }
 
             case 'hit': {
-                // Relay damage confirmation to the specific target
                 const target = players.get(msg.targetId);
                 if (target) send(target.ws, { type: 'hit', targetId: msg.targetId, damage: msg.damage });
                 break;
@@ -67,6 +147,11 @@ wss.on('connection', (ws) => {
 
             case 'kill': {
                 broadcast({ type: 'kill', targetId: msg.targetId });
+                break;
+            }
+
+            case 'entity_death': {
+                broadcast({ type: 'entity_death', entityId: msg.entityId }, playerId);
                 break;
             }
 
@@ -79,10 +164,18 @@ wss.on('connection', (ws) => {
 
     ws.on('close', () => {
         if (!playerId) return;
+        game.alivePlayers.delete(playerId);
         players.delete(playerId);
         broadcast({ type: 'leave', id: playerId });
-        console.log(`[-] ${playerId.slice(0,8)} left    (${players.size} online)`);
+        console.log(`[-] ${playerId.slice(0, 8)} left  (${players.size} online)`);
+        if (players.size > 0) checkAllDead();
+        else if (game.resetTimer) { clearInterval(game.resetTimer); game.resetting = false; }
     });
+});
+
+httpServer.listen(PORT, () => {
+    console.log(`[Server] Game running at  http://localhost:${PORT}`);
+    console.log(`[Server] Share via ngrok: ngrok http ${PORT}`);
 });
 
 function send(ws, obj) {

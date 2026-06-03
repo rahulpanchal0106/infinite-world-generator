@@ -1,7 +1,19 @@
 import * as THREE from 'three';
 import { createNoise2D } from 'simplex-noise';
-const noise2D = createNoise2D();
 import { Animal, PlayerBase, Monster } from './entities.js';
+
+// Fixed-seed PRNG — every browser gets identical terrain and the same spawn point
+function mulberry32(seed) {
+    return () => {
+        seed |= 0;
+        seed = seed + 0x6D2B79F5 | 0;
+        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+
+const noise2D = createNoise2D(mulberry32(12345));
 
 export function getBiomeData(x, z) {
     const seed = window.GameSettings ? window.GameSettings.worldSeedOffset : 0;
@@ -67,6 +79,15 @@ const pineMat = new THREE.MeshStandardMaterial({ color: 0x1a3320, flatShading: t
 const cactusMat = new THREE.MeshStandardMaterial({ color: 0x477a43, flatShading: true }); 
 const bushMat = new THREE.MeshStandardMaterial({ color: 0x34542a, flatShading: true });
 const rockMat = new THREE.MeshStandardMaterial({ color: 0x88949e, flatShading: true, roughness: 0.9 }); 
+
+// Seeded per-chunk RNG — same chunk coords always produce same layout on every client
+function makeChunkRNG(chunkX, chunkZ) {
+    let seed = Math.abs((chunkX * 73856093) ^ (chunkZ * 19349663)) % 2147483647 || 1;
+    return () => {
+        seed = (seed * 1664525 + 1013904223) & 0x7fffffff;
+        return seed / 0x7fffffff;
+    };
+}
 
 // --- 3. ARCHITECTURE ---
 const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8e5d1, flatShading: true }); 
@@ -192,71 +213,67 @@ class Chunk {
     }
 
     buildWorld() {
+        const rng = makeChunkRNG(this.chunkX, this.chunkZ); // seeded — identical on every client
         const oakData = [], pineData = [], cactusData = [], bushData = [], rockData = [];
         const offsetX = this.chunkX * chunkSize;
         const offsetZ = this.chunkZ * chunkSize;
-        const houseLocations = []; 
+        const houseLocations = [];
 
         for(let i = 0; i < 4000; i++) {
-            const lx = (Math.random() - 0.5) * chunkSize; 
-            const lz = (Math.random() - 0.5) * chunkSize; 
-            const gx = lx + offsetX; 
-            const gz = lz + offsetZ; 
+            const lx = (rng() - 0.5) * chunkSize;
+            const lz = (rng() - 0.5) * chunkSize;
+            const gx = lx + offsetX;
+            const gz = lz + offsetZ;
             const gy = getTerrainHeight(gx, gz);
             const gyNext = getTerrainHeight(gx + 1, gz);
             const slope = Math.abs(gyNext - gy);
 
             const { temp, moisture, townNoise, vegNoise } = getBiomeData(gx, gz);
-            const treeLine = 40 + (moisture * 160); 
+            const treeLine = 40 + (moisture * 160);
 
-            if (gy > 26) { 
-                const rand = Math.random();
+            if (gy > 26) {
+                const rand = rng();
                 let insideHouseRadius = false;
 
                 houseLocations.forEach(h => {
                     const dx = gx - h.x; const dz = gz - h.z;
-                    if (dx*dx + dz*dz < 250) insideHouseRadius = true; 
+                    if (dx*dx + dz*dz < 250) insideHouseRadius = true;
                 });
-                
+
                 if (townNoise > 0.92 && slope < 0.25 && gy < 80 && temp > 0.35 && temp < 0.65) {
                     if (rand < 0.15 && !insideHouseRadius && houseLocations.length < 15) {
-                        const streetRotation = Math.floor(Math.random() * 4) * (Math.PI / 2);
+                        const streetRotation = Math.floor(rng() * 4) * (Math.PI / 2);
                         this.buildHollowCabin(gx, gy, gz, streetRotation);
                         houseLocations.push({x: gx, z: gz});
-                        insideHouseRadius = true; 
+                        insideHouseRadius = true;
                     }
-                } 
-                
+                }
+
                 if (!insideHouseRadius) {
-                    // UPGRADE: Dynamic Spawning Math
                     const isTownZone = townNoise > 0.92;
-                    // Multiply base chance by our vegNoise to create clumps and clearings!
-                    const treeChance = isTownZone ? 0.005 : (0.05 * vegNoise * (moisture + 0.2)); 
+                    const treeChance = isTownZone ? 0.005 : (0.05 * vegNoise * (moisture + 0.2));
 
                     if (slope < 0.8 && gy < treeLine) {
                         if (rand < treeChance) {
                             if (temp < 0.35) {
-                                pineData.push({ lx, gy, lz }); 
+                                pineData.push({ lx, gy, lz });
                                 this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.5 });
                             } else if (temp > 0.65) {
-                                // DESERT FIX: Cacti spawn 90% less often than trees
-                                if (Math.random() > 0.90) { 
-                                    cactusData.push({ lx, gy, lz }); 
-                                    this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 1.0 }); // Cacti are thinner
+                                if (rng() > 0.90) {
+                                    cactusData.push({ lx, gy, lz });
+                                    this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 1.0 });
                                 }
                             } else {
-                                oakData.push({ lx, gy, lz }); 
+                                oakData.push({ lx, gy, lz });
                                 this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.5 });
                             }
                         }
-                        // Bushes also follow the clumping noise and don't spawn in deserts
                         else if (rand < 0.15 * vegNoise && temp < 0.65) {
                             bushData.push({ lx, gy, lz });
                         }
                     }
                 }
-                
-                // Rocks are sparser, but spawn everywhere
+
                 if (rand > 0.98 && rockData.length < 40 && !insideHouseRadius) {
                     rockData.push({ lx, gy, lz });
                     this.obstacles.push({ type: 'circle', x: gx, z: gz, r: 2.0 });
@@ -270,11 +287,11 @@ class Chunk {
             const mesh = new THREE.InstancedMesh(geo, mat, data.length);
             mesh.castShadow = castShadow; mesh.receiveShadow = true;
             mesh.position.set(offsetX, 0, offsetZ);
-            
+
             data.forEach((pos, index) => {
-                const scale = scaleVariance.min + Math.random() * scaleVariance.range; 
-                dummyMatrix.position.set(pos.lx, pos.gy - 0.2, pos.lz); 
-                dummyMatrix.rotation.y = Math.random() * Math.PI * 2; 
+                const scale = scaleVariance.min + rng() * scaleVariance.range;
+                dummyMatrix.position.set(pos.lx, pos.gy - 0.2, pos.lz);
+                dummyMatrix.rotation.y = rng() * Math.PI * 2;
                 dummyMatrix.scale.set(scale, scale, scale);
                 dummyMatrix.updateMatrix();
                 mesh.setMatrixAt(index, dummyMatrix.matrix);
@@ -285,9 +302,9 @@ class Chunk {
         const meshesToAdd = [
             buildInstanced(trunkGeo, trunkMat, oakData, true, {min: 0.7, range: 0.8}),
             buildInstanced(leavesGeo, leavesMat, oakData, true, {min: 0.7, range: 0.8}),
-            buildInstanced(trunkGeo, trunkMat, pineData, true, {min: 0.8, range: 0.5}), 
+            buildInstanced(trunkGeo, trunkMat, pineData, true, {min: 0.8, range: 0.5}),
             buildInstanced(pineLeavesGeo, pineMat, pineData, true, {min: 0.8, range: 0.5}),
-            buildInstanced(cactusGeo, cactusMat, cactusData, true, {min: 0.8, range: 1.2}), 
+            buildInstanced(cactusGeo, cactusMat, cactusData, true, {min: 0.8, range: 1.2}),
             buildInstanced(bushGeo, bushMat, bushData, false, {min: 0.3, range: 0.7}),
             buildInstanced(rockGeo, rockMat, rockData, true, {min: 0.5, range: 1.5})
         ];
@@ -296,35 +313,35 @@ class Chunk {
             if (mesh) { this.scene.add(mesh); this.meshes.push(mesh); }
         });
 
-        // --- NEW: ANIMAL SPAWNING ---
-        // Spawn 0 to 4 animals randomly per chunk
-        const animalCount = Math.floor(Math.random() * 5); 
+        // Animals — seeded so every client spawns the same ones in the same spots
+        const animalCount = Math.floor(rng() * 5);
         for(let i = 0; i < animalCount; i++) {
-            const ax = (Math.random() - 0.5) * chunkSize + offsetX;
-            const az = (Math.random() - 0.5) * chunkSize + offsetZ;
+            const ax = (rng() - 0.5) * chunkSize + offsetX;
+            const az = (rng() - 0.5) * chunkSize + offsetZ;
             const ay = getTerrainHeight(ax, az);
-            
-            // Only spawn on dry land, not too steep
             const slope = Math.abs(getTerrainHeight(ax + 1, az) - ay);
             if (ay > 28 && slope < 0.5) {
                 const { temp } = getBiomeData(ax, az);
-                let type = 'deer'; // Default temperate
-                if (temp > 0.65) type = 'camel'; // Desert
-                else if (temp < 0.35) type = 'bear'; // Tundra
-                
-                this.animals.push(new Animal(type, ax, ay, az, this.scene));
+                let type = 'deer';
+                if (temp > 0.65) type = 'camel';
+                else if (temp < 0.35) type = 'bear';
+                const animal = new Animal(type, ax, ay, az, this.scene);
+                animal.entityId = `a:${this.chunkX},${this.chunkZ},${i}`;
+                this.animals.push(animal);
             }
         }
 
-        const monsterCount = Math.floor(Math.random() * 2); // 0 or 1 monster per chunk
-     for(let i = 0; i < monsterCount; i++) {
-         const mx = (Math.random() - 0.5) * chunkSize + offsetX;
-         const mz = (Math.random() - 0.5) * chunkSize + offsetZ;
-         const my = getTerrainHeight(mx, mz);
-         if (my > 22) { // Only spawn on dry land
-             this.monsters.push(new Monster(mx, my, mz, this.scene));
-         }
-     }
+        const monsterCount = Math.floor(rng() * 2);
+        for(let i = 0; i < monsterCount; i++) {
+            const mx = (rng() - 0.5) * chunkSize + offsetX;
+            const mz = (rng() - 0.5) * chunkSize + offsetZ;
+            const my = getTerrainHeight(mx, mz);
+            if (my > 22) {
+                const monster = new Monster(mx, my, mz, this.scene);
+                monster.entityId = `m:${this.chunkX},${this.chunkZ},${i}`;
+                this.monsters.push(monster);
+            }
+        }
     }
 
     dispose() {
@@ -351,11 +368,12 @@ export function findTownSpawn() {
             
             const { temp, townNoise } = getBiomeData(gx, gz);
             
-            if (townNoise > 0.92 && temp > 0.35 && temp < 0.65) {
+            // 0.82–0.91: near the town but outside where cabins are built (>0.92)
+            if (townNoise > 0.82 && townNoise < 0.91 && temp > 0.35 && temp < 0.65) {
                 const gy = getTerrainHeight(gx, gz);
                 if (gy > 26 && gy < 80) {
                     const gyNext = getTerrainHeight(gx + 1, gz);
-                    if (Math.abs(gyNext - gy) < 0.25) return { x: gx, y: gy + 5, z: gz }; 
+                    if (Math.abs(gyNext - gy) < 0.25) return { x: gx, y: gy + 5, z: gz };
                 }
             }
         }

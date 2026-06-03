@@ -4,8 +4,7 @@
   "description": "Procedural world with multiplayer",
   "main": "server.js",
   "scripts": {
-    "server": "node server.js",
-    "client": "python3 -m http.server 8080"
+    "start": "node server.js"
   },
   "dependencies": {
     "ws": "^8.16.0"

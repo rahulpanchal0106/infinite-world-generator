@@ -1,10 +1,11 @@
 // WebSocket multiplayer client.
 // Falls back silently to offline mode when no server is reachable.
 export class NetworkManager {
-    constructor(serverUrl = 'ws://localhost:3000') {
+    constructor(serverUrl = 'ws://localhost:3000', playerName = 'Player') {
         this.serverUrl  = serverUrl;
         this.socket     = null;
         this.playerId   = crypto.randomUUID();
+        this.playerName = playerName;
         this.connected  = false;
         this.latency    = 0;
 
@@ -27,11 +28,15 @@ export class NetworkManager {
 
     // Broadcast this player's position/state 20× per second.
     sendState({ x, y, z, rotY, health, weapon, spawnX, spawnY, spawnZ }) {
-        this._send('state', { x, y, z, rotY, health, weapon, spawnX, spawnY, spawnZ });
+        this._send('state', { x, y, z, rotY, health, weapon, spawnX, spawnY, spawnZ, name: this.playerName });
     }
 
-    sendShot(origin, direction, damage) {
-        this._send('shot', { origin, direction, damage });
+    sendShot(ox, oy, oz, dx, dy, dz, speed) {
+        this._send('shot', { ox, oy, oz, dx, dy, dz, speed });
+    }
+
+    sendEntityDeath(entityId) {
+        this._send('entity_death', { entityId });
     }
 
     sendHit(targetId, damage) {
@@ -51,7 +56,7 @@ export class NetworkManager {
     _onOpen() {
         this.connected = true;
         console.log('[MP] Connected, id =', this.playerId);
-        this._send('join');
+        this._send('join', { name: this.playerName });
         this._pingTimer = setInterval(() => {
             this._pingTs = performance.now();
             this._send('ping');
