@@ -18,12 +18,15 @@ const MIME = {
     '.png':  'image/png',
     '.jpg':  'image/jpeg',
     '.ico':  'image/x-icon',
+    '.glb':  'model/gltf-binary',
+    '.gltf': 'model/gltf+json',
+    '.fbx':  'application/octet-stream',
 };
 
 // ── Static file server ──────────────────────────────────────────────────────
 const httpServer = http.createServer((req, res) => {
     // strip query strings, default to index.html
-    const urlPath = req.url.split('?')[0];
+    const urlPath  = decodeURIComponent(req.url.split('?')[0]);
     const filePath = path.join(__dirname, urlPath === '/' ? 'index.html' : urlPath);
     const ext = path.extname(filePath).toLowerCase();
 
@@ -141,12 +144,22 @@ wss.on('connection', (ws) => {
 
             case 'hit': {
                 const target = players.get(msg.targetId);
-                if (target) send(target.ws, { type: 'hit', targetId: msg.targetId, damage: msg.damage });
+                // Relay damage + attacker name so the victim knows who killed them
+                if (target) send(target.ws, { type: 'hit', targetId: msg.targetId, damage: msg.damage, attackerName: msg.attackerName || '' });
                 break;
             }
 
             case 'kill': {
                 broadcast({ type: 'kill', targetId: msg.targetId });
+                break;
+            }
+
+            case 'kill_feed': {
+                // Broadcast to ALL players (including sender) so everyone sees the feed
+                broadcast({ type: 'kill_feed', killerName: msg.killerName, victimName: msg.victimName });
+                // Also echo back to sender
+                send(ws, { type: 'kill_feed', killerName: msg.killerName, victimName: msg.victimName });
+                console.log(`[Kill] ${msg.killerName} killed ${msg.victimName}`);
                 break;
             }
 

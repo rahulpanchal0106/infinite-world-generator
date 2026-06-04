@@ -373,13 +373,13 @@ export function findTownSpawn() {
                 const gy = getTerrainHeight(gx, gz);
                 if (gy > 26 && gy < 80) {
                     const gyNext = getTerrainHeight(gx + 1, gz);
-                    if (Math.abs(gyNext - gy) < 0.25) return { x: gx, y: gy + 5, z: gz };
+                    if (Math.abs(gyNext - gy) < 0.25) return { x: gx, y: gy + 1.7, z: gz };
                 }
             }
         }
         searchRadius += step;
     }
-    return { x: 0, y: getTerrainHeight(0, 0) + 5, z: 0 };
+    return { x: 0, y: getTerrainHeight(0, 0) + 1.7, z: 0 };
 }
 
 export class ChunkManager {

@@ -87,21 +87,24 @@ document.getElementById('btn-regenerate').addEventListener('click', () => {
 
 // Scatter each player around the spawn point and escape any cabin collision
 function safeSpawn(base) {
+    // Give each player a unique angle so they spread around the town
     const angle = Math.random() * Math.PI * 2;
-    const dist  = 6 + Math.random() * 10;
+    const dist  = 15 + Math.random() * 15;   // 15-30 units away — no overlapping
     let sx = base.x + Math.cos(angle) * dist;
     let sz = base.z + Math.sin(angle) * dist;
 
-    for (let r = 0; r < 60; r += 4) {
+    for (let r = 0; r < 80; r += 4) {
         for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
             const tx = sx + Math.cos(a) * r;
             const tz = sz + Math.sin(a) * r;
-            if (!chunkManager.checkCollision(tx, tz, 1.2)) {
-                return { x: tx, y: getTerrainHeight(tx, tz) + 3, z: tz };
+            const ty = getTerrainHeight(tx, tz);
+            // Must be on dry land (above ocean level 25) and no collision
+            if (ty > 26 && !chunkManager.checkCollision(tx, tz, 1.2)) {
+                return { x: tx, y: ty + 1.7, z: tz };
             }
         }
     }
-    return { x: sx, y: getTerrainHeight(sx, sz) + 3, z: sz };
+    return { x: sx, y: Math.max(getTerrainHeight(sx, sz), 26) + 1.7, z: sz };
 }
 
 // Initial Spawn
@@ -124,6 +127,7 @@ function rebuildWorld(seed) {
 }
 
 function respawnPlayer() {
+    player.exitSpectator();   // leave ghost mode: restore gun, hide banner
     player.health  = 100;
     player.isDead  = false;
     player.score   = 0;
@@ -132,6 +136,12 @@ function respawnPlayer() {
     document.getElementById('death-screen').style.display = 'none';
     player.hud.style.display    = 'block';
     player.hotbar.style.display = 'block';
+    // Reset killed-by text and kill feed z-index for next round
+    const kb = document.getElementById('killed-by');
+    if (kb) kb.textContent = '';
+    killFeedEl.style.zIndex  = '50';
+    _lastAttackerName  = null;
+    _wasDeadLastFrame  = false;
 }
 
 function showToast(text, ms = 3500) {
@@ -189,6 +199,7 @@ network.on('snapshot', (msg) => {
         if (state.id === network.playerId) continue;
         let rp = remotePlayers.get(state.id);
         if (!rp) {
+            if (state.isDead) continue;   // eliminated players stay invisible (spectators)
             rp = new RemotePlayer(state.id, scene, state.x, state.y, state.z, state.name);
             remotePlayers.set(state.id, rp);
             refreshMpHUD();
@@ -202,6 +213,7 @@ network.on('state', (msg) => {
     if (msg.id === network.playerId) return;
     let rp = remotePlayers.get(msg.id);
     if (!rp) {
+        if (msg.isDead) return;   // eliminated players stay invisible (spectators)
         rp = new RemotePlayer(msg.id, scene, msg.x, msg.y, msg.z, msg.name);
         remotePlayers.set(msg.id, rp);
         refreshMpHUD();
@@ -209,14 +221,72 @@ network.on('state', (msg) => {
     rp.applyState(msg);
 });
 
+// ── Kill Feed UI ──────────────────────────────────────────────────────────
+const killFeedEl = document.createElement('div');
+killFeedEl.style.cssText = [
+    'position:absolute', 'top:90px', 'left:20px',
+    'font-family:monospace', 'font-size:0.82rem',
+    'z-index:50', 'pointer-events:none', 'width:260px'
+].join(';');
+document.body.appendChild(killFeedEl);
+
+function addKillEntry(killer, victim, isLocalKill, isLocalDeath) {
+    const el = document.createElement('div');
+    const kColor  = isLocalKill  ? '#ffdd44' : '#ff6666';
+    const vColor  = isLocalDeath ? '#ff4444' : '#aaa';
+    el.style.cssText = [
+        'background:rgba(0,0,0,0.65)', 'padding:4px 10px',
+        'margin-bottom:4px', 'border-radius:4px',
+        `border-left:3px solid ${kColor}`,
+        'transition:opacity 0.5s', 'opacity:1'
+    ].join(';');
+    el.innerHTML =
+        `<span style="color:${kColor};font-weight:bold">${killer}</span>` +
+        ` <span style="color:#888">killed</span> ` +
+        `<span style="color:${vColor};font-weight:bold">${victim}</span>`;
+    killFeedEl.insertBefore(el, killFeedEl.firstChild);
+    // Fade out after 6 s
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 6000);
+    // Max 5 entries
+    while (killFeedEl.children.length > 5) killFeedEl.lastChild.remove();
+}
+
+// Show/hide with HUD
+player.controls.addEventListener('lock',   () => { killFeedEl.style.display = 'block'; });
+player.controls.addEventListener('unlock', () => { killFeedEl.style.display = 'none'; });
+killFeedEl.style.display = 'none';
+
+// Track who last attacked us so we can credit the kill
+let _lastAttackerName = null;
+let _wasDeadLastFrame = false;
+
 // Server confirmed we were hit by another player
 network.on('hit', (msg) => {
-    if (msg.targetId === network.playerId) player.takeDamage(msg.damage);
+    if (msg.targetId === network.playerId) {
+        _lastAttackerName = msg.attackerName || null;
+        player.takeDamage(msg.damage);
+    }
 });
 
 // Server confirmed a kill
 network.on('kill', (msg) => {
     remotePlayers.get(msg.targetId)?.die();
+});
+
+// Kill feed event from any player dying
+network.on('kill_feed', (msg) => {
+    const isLocalKill  = msg.killerName === network.playerName;
+    const isLocalDeath = msg.victimName === network.playerName;
+    addKillEntry(msg.killerName, msg.victimName, isLocalKill, isLocalDeath);
+
+    // Show "Killed by X" on the death screen so the dying player knows
+    if (isLocalDeath) {
+        const el = document.getElementById('killed-by');
+        if (el) el.textContent = `☠️  Killed by ${msg.killerName}`;
+        // Also make the kill feed visible over the death screen so they see it
+        killFeedEl.style.display = 'block';
+        killFeedEl.style.zIndex  = '250';   // above death screen (z-index 200)
+    }
 });
 
 // Another player killed an animal/monster — kill it on our screen too
@@ -258,7 +328,7 @@ network.on('disconnect', refreshMpHUD);
 
 // When a bullet hits a remote player — send hit to server, server relays to target
 player.onRemotePlayerHit = (rp, damage) => {
-    network.sendHit(rp.id, damage);
+    network.sendHit(rp.id, damage, network.playerName);
 };
 
 // When local player fires — broadcast so others see the tracer + muzzle flash
@@ -333,11 +403,16 @@ function animate() {
     broadcastTimer += delta;
     if (broadcastTimer >= 1 / 20) {
         broadcastTimer = 0;
+        // Derive yaw from the camera's world-direction vector (full 360° range).
+        // camera.rotation.y (Euler XYZ) folds at ±90° via asin — do NOT use it.
+        const _dir = new THREE.Vector3();
+        camera.getWorldDirection(_dir);
+        const camYaw = Math.atan2(_dir.x, _dir.z);
         network.sendState({
             x: camera.position.x,
-            y: camera.position.y - 3.0,   // send feet position, not eye position
+            y: camera.position.y,
             z: camera.position.z,
-            rotY: camera.rotation.y,
+            rotY: camYaw,
             health: player.health,
             isDead: player.isDead,
             weapon: player.currentWeaponIndex,
@@ -347,6 +422,14 @@ function animate() {
             spawnZ: spawnPoint.z,
         });
         if (network.connected) refreshMpHUD();
+
+        // Detect local-player death transition and broadcast kill feed
+        if (player.isDead && !_wasDeadLastFrame) {
+            const killer = _lastAttackerName || 'Unknown';
+            const victim = network.playerName;
+            network._send('kill_feed', { killerName: killer, victimName: victim });
+        }
+        _wasDeadLastFrame = player.isDead;
     }
 
     ocean.position.x = camera.position.x;

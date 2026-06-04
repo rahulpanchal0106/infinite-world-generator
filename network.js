@@ -39,8 +39,8 @@ export class NetworkManager {
         this._send('entity_death', { entityId });
     }
 
-    sendHit(targetId, damage) {
-        this._send('hit', { targetId, damage });
+    sendHit(targetId, damage, attackerName = '') {
+        this._send('hit', { targetId, damage, attackerName });
     }
 
     disconnect() {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { PlayerBase } from './entities.js'; 
+import { PlayerBase } from './entities.js';
+import { loadGunModel } from './gun-model.js';
 
 export class Player {
     constructor(camera, domElement, uiElement, getTerrainHeightFunc, checkCollisionFunc, scene) {
@@ -19,7 +20,8 @@ export class Player {
         uiElement.addEventListener('click', () => this.controls.lock());
         this.controls.addEventListener('lock', () => {
             uiElement.style.display = 'none';
-            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block'; 
+            if (this.isSpectator) { this.spectatorBanner.style.display = 'block'; return; }
+            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block';
             if (!this.isDead) { this.hud.style.display = 'block'; this.hotbar.style.display = 'block'; }
         });
         this.controls.addEventListener('unlock', () => {
@@ -34,7 +36,21 @@ export class Player {
         this.canJump = false;
 
         this.health = 100; this.score = 0; this.isDead = false;
+        this.isSpectator = false;                 // eliminated → walk-only ghost
+        this.headshotMultiplier = 4;              // sniper body 20 → head 80
+        this.regenDelayMs = 60000;                // taken damage heals back after 1 min
         this.healthUI = document.getElementById('healthDisplay'); this.scoreUI = document.getElementById('scoreDisplay');
+
+        // Spectator banner (hidden until eliminated)
+        this.spectatorBanner = document.createElement('div');
+        this.spectatorBanner.style.cssText = [
+            'position:absolute', 'top:18px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.7)', 'color:#bbb', 'font-family:monospace',
+            'font-size:1rem', 'padding:8px 20px', 'border-radius:6px',
+            'border:1px solid #444', 'z-index:160', 'pointer-events:none', 'display:none'
+        ].join(';');
+        this.spectatorBanner.textContent = '👻 SPECTATING — you were eliminated';
+        document.body.appendChild(this.spectatorBanner);
 
         this.raycaster = new THREE.Raycaster();
         this.raycaster.layers.set(0); // layer 0 only — ignores weapons (layer 1)
@@ -55,14 +71,18 @@ export class Player {
         const gunMatSilver = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.5 });
 
         const sniperGroup = new THREE.Group();
-        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 1.5), gunMatDark); barrel.position.set(0, 0.1, -0.6);
-        const stock = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.2, 0.8), gunMatWood); stock.position.set(0, 0, 0.4);
-        const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.4, 8), gunMatDark); scope.rotation.x = Math.PI / 2; scope.position.set(0, 0.25, 0);
-        sniperGroup.add(barrel, stock, scope);
+        // Sniper rifle model loaded from GLB (replaces the old box geometry).
+        // Native model: barrel +Z, up +Y. Camera looks down -Z, so rotate 180°
+        // about Y to aim the muzzle forward (away from the player).
+        loadGunModel('./models/sniper.glb', 1.4, (model) => {
+            model.traverse(child => { if (child.isMesh) child.layers.set(1); });
+            model.rotation.y = Math.PI;
+            sniperGroup.add(model);
+        });
         
         const deagleGroup = new THREE.Group();
         const slide = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.15, 0.6), gunMatSilver); slide.position.set(0, 0.2, -0.2);
-        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.2), gunMatDark); grip.rotation.x = 0.3; grip.position.set(0, -0.05, 0);
+        const grip  = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.2), gunMatDark);    grip.rotation.x = 0.3; grip.position.set(0, -0.05, 0);
         deagleGroup.add(slide, grip);
 
         const hammerGroup = new THREE.Group();
@@ -70,15 +90,14 @@ export class Player {
         const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.5), gunMatSilver); head.position.set(0, 0.15, -0.35); head.rotation.x = -Math.PI / 4;
         hammerGroup.add(handle, head);
 
-        sniperGroup.stats = { damage: 100, fireRate: 1.5, recoil: 0.4, speed: 600, drop: 9.8, type: 'gun' };
-        deagleGroup.stats = { damage: 35, fireRate: 0.3, recoil: 0.15, speed: 200, drop: 15.0, type: 'gun' };
-        hammerGroup.stats = { fireRate: 0.3, recoil: 0.2, type: 'tool' };
+        sniperGroup.stats = { damage: 20, fireRate: 1.5, recoil: 0.4, speed: 600, drop: 9.8, type: 'gun' };
+        deagleGroup.stats  = { damage: 35,  fireRate: 0.3, recoil: 0.15, speed: 200, drop: 15.0, type: 'gun' };
+        hammerGroup.stats  = { fireRate: 0.3, recoil: 0.2, type: 'tool' };
 
         this.weapons.push(sniperGroup, deagleGroup, hammerGroup);
         this.weapons.forEach((w, index) => {
             w.position.set(0.4, -0.3, -0.6);
             w.visible = index === 0;
-            // Put all weapon parts on layer 1 so the raycaster never hits them
             w.traverse(child => { if (child.isMesh) child.layers.set(1); });
             this.camera.add(w);
         });
@@ -117,6 +136,7 @@ export class Player {
     }
 
     switchWeapon(index) {
+        if (this.isSpectator) return;
         if (this.currentWeaponIndex === index) return;
         if (this.currentZoomIndex > 0) { this.currentZoomIndex = 0; this.applyZoom(); }
         this.weapons.forEach((w, i) => w.visible = (i === index));
@@ -124,6 +144,7 @@ export class Player {
     }
 
     toggleScope() {
+        if (this.isSpectator) return;
         if (this.currentWeaponIndex !== 0) return;
         this.currentZoomIndex++;
         if (this.currentZoomIndex >= this.zoomLevels.length) this.currentZoomIndex = 0; 
@@ -151,6 +172,15 @@ export class Player {
     takeDamage(amount, attackerPos = null) {
         if (this.isDead) return;
         this.health -= amount; this.healthUI.innerText = `Health: ${this.health}`;
+
+        // Regenerate this exact amount after the regen delay (1 min), capped at
+        // 100 — but only if we're still alive when the timer fires.
+        setTimeout(() => {
+            if (this.isDead || this.isSpectator) return;
+            this.health = Math.min(100, this.health + amount);
+            this.healthUI.innerText = `Health: ${this.health}`;
+        }, this.regenDelayMs);
+
         const flash = document.createElement('div');
         flash.style.position = 'absolute'; flash.style.top = '0'; flash.style.left = '0'; flash.style.width = '100%'; flash.style.height = '100%';
         flash.style.background = 'rgba(255, 0, 0, 0.4)'; flash.style.pointerEvents = 'none'; flash.style.zIndex = '150';
@@ -174,15 +204,52 @@ export class Player {
         }
 
         if (this.health <= 0) {
-            this.isDead = true; this.health = 0; this.healthUI.innerText = `Health: 0`; this.controls.unlock();
-            document.getElementById('ui').style.display = 'none'; document.getElementById('settingsMenu').style.display = 'none';
-            this.hud.style.display = 'none'; this.hotbar.style.display = 'none'; this.deathScreen.style.display = 'flex';
-            document.getElementById('final-score').innerText = `Final Score: ${this.score}`;
+            this.health = 0; this.healthUI.innerText = `Health: 0`;
+            this.enterSpectator();
+        }
+    }
+
+    // Eliminated: become an invisible, gun-less ghost that can still walk.
+    // We keep the pointer locked so movement keeps working — no death screen.
+    enterSpectator() {
+        if (this.isSpectator) return;
+        this.isSpectator = true;
+        this.isDead = true;          // networking: server counts us dead; drives kill feed
+        this.canShoot = false;
+
+        // Drop any scope/zoom and hide every weapon + combat UI
+        this.currentZoomIndex = 0;
+        this.camera.fov = this.baseFov;
+        this.camera.updateProjectionMatrix();
+        this.controls.pointerSpeed = 1;
+        this.weapons.forEach(w => w.visible = false);
+        this.crosshair.style.display = 'none';
+        this.scopeOverlay.style.display = 'none';
+        this.hud.style.display = 'none';
+        this.hotbar.style.display = 'none';
+        this.spectatorBanner.style.display = 'block';
+    }
+
+    // Round reset / respawn — restore a living, armed player.
+    exitSpectator() {
+        this.isSpectator = false;
+        this.isDead = false;
+        this.health = 100;
+        this.healthUI.innerText = 'Health: 100';
+        this.canShoot = true;
+        this.currentWeaponIndex = 0;
+        this.currentZoomIndex = 0;
+        this.weapons.forEach((w, i) => w.visible = (i === 0));
+        this.spectatorBanner.style.display = 'none';
+        if (this.controls.isLocked) {
+            this.crosshair.style.display = 'block';
+            this.hud.style.display = 'block';
+            this.hotbar.style.display = 'block';
         }
     }
 
     shoot() {
-        if (!this.canShoot || this.isDead) return;
+        if (!this.canShoot || this.isDead || this.isSpectator) return;
         const currentWeapon = this.weapons[this.currentWeaponIndex];
 
         this.recoilOffset = currentWeapon.stats.recoil;
@@ -218,8 +285,15 @@ export class Player {
                 let entityHit = false;
                 while (cur) {
                     if (cur.remotePlayerRef) {
-                        cur.remotePlayerRef.flash();
-                        if (this.onRemotePlayerHit) this.onRemotePlayerHit(cur.remotePlayerRef, currentWeapon.stats.damage);
+                        const rp = cur.remotePlayerRef;
+                        // Headshot: hit point sits in the upper ~head zone above
+                        // the player's feet (mesh.position.y is snapped to ground).
+                        const isHead = hit.point.y >= rp.mesh.position.y + 1.5;
+                        const damage = isHead
+                            ? currentWeapon.stats.damage * this.headshotMultiplier
+                            : currentWeapon.stats.damage;
+                        rp.flash();
+                        if (this.onRemotePlayerHit) this.onRemotePlayerHit(rp, damage, isHead);
                         entityHit = true; break;
                     }
                     if (cur.animalRef)  { cur.animalRef.takeDamage(currentWeapon.stats.damage, this);  entityHit = true; break; }
@@ -258,7 +332,8 @@ export class Player {
     }
 
     update(delta) {
-        if (!this.controls.isLocked || this.isDead) return;
+        // Spectators (isDead) keep walking — only fully stop when unlocked.
+        if (!this.controls.isLocked) return;
 
         // Tracer bullets — visual only, damage was dealt instantly on fire
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
@@ -327,8 +402,8 @@ export class Player {
             }
         }
         
-        if (this.camera.position.y < floorHeight + 3.0) { 
-            this.velocity.y = 0; this.camera.position.y = floorHeight + 3.0; this.canJump = true; 
+        if (this.camera.position.y < floorHeight + 1.7) {
+            this.velocity.y = 0; this.camera.position.y = floorHeight + 1.7; this.canJump = true; 
         } else { this.canJump = false; }
     }
 }
