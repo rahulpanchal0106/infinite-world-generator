@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { PlayerBase } from './entities.js'; 
+import { PlayerBase } from './entities.js';
+import { loadGunModel } from './gun-model.js';
+import { Airplane } from './plane.js';
 
 export class Player {
     constructor(camera, domElement, uiElement, getTerrainHeightFunc, checkCollisionFunc, scene) {
@@ -16,10 +18,16 @@ export class Player {
         this.deathScreen = document.getElementById('death-screen');
         this.hotbar = document.getElementById('hotbar'); 
         
-        uiElement.addEventListener('click', () => this.controls.lock());
+        uiElement.addEventListener('click', (e) => {
+            // Don't lock if the click was on an input, button, or any other
+            // interactive element — let those handle their own events normally.
+            if (e.target.closest('input, button, select, a, textarea')) return;
+            this.controls.lock();
+        });
         this.controls.addEventListener('lock', () => {
             uiElement.style.display = 'none';
-            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block'; 
+            if (this.isSpectator) { this.spectatorBanner.style.display = 'block'; return; }
+            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block';
             if (!this.isDead) { this.hud.style.display = 'block'; this.hotbar.style.display = 'block'; }
         });
         this.controls.addEventListener('unlock', () => {
@@ -34,9 +42,55 @@ export class Player {
         this.canJump = false;
 
         this.health = 100; this.score = 0; this.isDead = false;
+        this.isSpectator = false;                 // eliminated → walk-only ghost
+        this.headshotMultiplier = 4;              // sniper body 20 → head 80
+        this.regenDelayMs = 60000;                // taken damage heals back after 1 min
         this.healthUI = document.getElementById('healthDisplay'); this.scoreUI = document.getElementById('scoreDisplay');
 
-        this.raycaster = new THREE.Raycaster(); this.weapons = []; this.projectiles = [];
+        // Spectator banner (hidden until eliminated)
+        this.spectatorBanner = document.createElement('div');
+        this.spectatorBanner.style.cssText = [
+            'position:absolute', 'top:18px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.7)', 'color:#bbb', 'font-family:monospace',
+            'font-size:1rem', 'padding:8px 20px', 'border-radius:6px',
+            'border:1px solid #444', 'z-index:160', 'pointer-events:none', 'display:none'
+        ].join(';');
+        this.spectatorBanner.textContent = '👻 SPECTATING — you were eliminated';
+        document.body.appendChild(this.spectatorBanner);
+
+        // ── Flight ──
+        this.isFlying = false;
+        this.flight = new Airplane(scene, camera);
+        this.flightCellKey = null;
+        this.getNearestPlane = null;   // set by main.js → PlaneManager.getNearest
+        this.onEnterPlane = null;      // (cellKey) → hide that parked plane
+        this.onExitPlane = null;       // (cellKey) → show that parked plane again
+
+        // "Press F to fly" prompt (shown when near a parked plane on foot)
+        this.planePrompt = document.createElement('div');
+        this.planePrompt.style.cssText = [
+            'position:absolute', 'bottom:120px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.7)', 'color:#ffe08a', 'font-family:monospace',
+            'font-size:1.1rem', 'padding:8px 20px', 'border-radius:6px',
+            'border:1px solid #6a5a2a', 'z-index:160', 'pointer-events:none', 'display:none'
+        ].join(';');
+        this.planePrompt.textContent = '✈️  Press F to fly';
+        document.body.appendChild(this.planePrompt);
+
+        // Flight controls hint (shown while flying)
+        this.flightHint = document.createElement('div');
+        this.flightHint.style.cssText = [
+            'position:absolute', 'bottom:20px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.6)', 'color:#cfe8ff', 'font-family:monospace',
+            'font-size:0.95rem', 'padding:6px 16px', 'border-radius:6px',
+            'border:1px solid #355', 'z-index:160', 'pointer-events:none', 'display:none'
+        ].join(';');
+        this.flightHint.textContent = '✈️  W/S pitch · A/D roll · Shift boost · F land';
+        document.body.appendChild(this.flightHint);
+
+        this.raycaster = new THREE.Raycaster();
+        this.raycaster.layers.set(0); // layer 0 only — ignores weapons (layer 1)
+        this.weapons = []; this.projectiles = [];
         this.currentWeaponIndex = 0; this.recoilOffset = 0; 
         this.placedBlocks = []; 
         
@@ -53,14 +107,18 @@ export class Player {
         const gunMatSilver = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.5 });
 
         const sniperGroup = new THREE.Group();
-        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 1.5), gunMatDark); barrel.position.set(0, 0.1, -0.6);
-        const stock = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.2, 0.8), gunMatWood); stock.position.set(0, 0, 0.4);
-        const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.4, 8), gunMatDark); scope.rotation.x = Math.PI / 2; scope.position.set(0, 0.25, 0);
-        sniperGroup.add(barrel, stock, scope);
+        // Sniper rifle model loaded from GLB (replaces the old box geometry).
+        // Native model: barrel +Z, up +Y. Camera looks down -Z, so rotate 180°
+        // about Y to aim the muzzle forward (away from the player).
+        loadGunModel('./models/sniper.glb', 1.4, (model) => {
+            model.traverse(child => { if (child.isMesh) child.layers.set(1); });
+            model.rotation.y = Math.PI;
+            sniperGroup.add(model);
+        });
         
         const deagleGroup = new THREE.Group();
         const slide = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.15, 0.6), gunMatSilver); slide.position.set(0, 0.2, -0.2);
-        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.2), gunMatDark); grip.rotation.x = 0.3; grip.position.set(0, -0.05, 0);
+        const grip  = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 0.2), gunMatDark);    grip.rotation.x = 0.3; grip.position.set(0, -0.05, 0);
         deagleGroup.add(slide, grip);
 
         const hammerGroup = new THREE.Group();
@@ -68,13 +126,20 @@ export class Player {
         const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.5), gunMatSilver); head.position.set(0, 0.15, -0.35); head.rotation.x = -Math.PI / 4;
         hammerGroup.add(handle, head);
 
-        sniperGroup.stats = { damage: 100, fireRate: 1.5, recoil: 0.4, speed: 600, drop: 9.8, type: 'gun' };
-        deagleGroup.stats = { damage: 35, fireRate: 0.3, recoil: 0.15, speed: 200, drop: 15.0, type: 'gun' };
-        hammerGroup.stats = { fireRate: 0.3, recoil: 0.2, type: 'tool' };
+        sniperGroup.stats = { damage: 20, fireRate: 1.5, recoil: 0.4, speed: 600, drop: 9.8, type: 'gun' };
+        deagleGroup.stats  = { damage: 35,  fireRate: 0.3, recoil: 0.15, speed: 200, drop: 15.0, type: 'gun' };
+        hammerGroup.stats  = { fireRate: 0.3, recoil: 0.2, type: 'tool' };
 
         this.weapons.push(sniperGroup, deagleGroup, hammerGroup);
-        this.weapons.forEach((w, index) => { w.position.set(0.4, -0.3, -0.6); w.visible = index === 0; this.camera.add(w); });
-        this.scene.add(this.camera); this.canShoot = true;
+        this.weapons.forEach((w, index) => {
+            w.position.set(0.4, -0.3, -0.6);
+            w.visible = index === 0;
+            w.traverse(child => { if (child.isMesh) child.layers.set(1); });
+            this.camera.add(w);
+        });
+        this.scene.add(this.camera);
+        this.camera.layers.enable(1); // camera sees layer 0 (world) + layer 1 (weapons); raycaster sees layer 0 only
+        this.canShoot = true;
     }
 
     initEventListeners() {
@@ -87,9 +152,11 @@ export class Player {
             if (e.code === 'ShiftLeft') this.moveState.run = true;
             if (e.code === 'Space' && this.canJump) this.velocity.y += 15; 
             
-            if (e.code === 'Digit1') this.switchWeapon(0); 
-            if (e.code === 'Digit2') this.switchWeapon(1); 
-            if (e.code === 'Digit3') this.switchWeapon(2); 
+            if (e.code === 'Digit1') this.switchWeapon(0);
+            if (e.code === 'Digit2') this.switchWeapon(1);
+            if (e.code === 'Digit3') this.switchWeapon(2);
+
+            if (e.code === 'KeyF') this.toggleFlight();
         });
         document.addEventListener('keyup', (e) => {
             if (e.code === 'KeyW') this.moveState.forward = false;
@@ -107,6 +174,7 @@ export class Player {
     }
 
     switchWeapon(index) {
+        if (this.isSpectator || this.isDead || this.isFlying) return;
         if (this.currentWeaponIndex === index) return;
         if (this.currentZoomIndex > 0) { this.currentZoomIndex = 0; this.applyZoom(); }
         this.weapons.forEach((w, i) => w.visible = (i === index));
@@ -114,6 +182,7 @@ export class Player {
     }
 
     toggleScope() {
+        if (this.isSpectator || this.isDead || this.isFlying) return;
         if (this.currentWeaponIndex !== 0) return;
         this.currentZoomIndex++;
         if (this.currentZoomIndex >= this.zoomLevels.length) this.currentZoomIndex = 0; 
@@ -141,6 +210,15 @@ export class Player {
     takeDamage(amount, attackerPos = null) {
         if (this.isDead) return;
         this.health -= amount; this.healthUI.innerText = `Health: ${this.health}`;
+
+        // Regenerate this exact amount after the regen delay (1 min), capped at
+        // 100 — but only if we're still alive when the timer fires.
+        setTimeout(() => {
+            if (this.isDead || this.isSpectator) return;
+            this.health = Math.min(100, this.health + amount);
+            this.healthUI.innerText = `Health: ${this.health}`;
+        }, this.regenDelayMs);
+
         const flash = document.createElement('div');
         flash.style.position = 'absolute'; flash.style.top = '0'; flash.style.left = '0'; flash.style.width = '100%'; flash.style.height = '100%';
         flash.style.background = 'rgba(255, 0, 0, 0.4)'; flash.style.pointerEvents = 'none'; flash.style.zIndex = '150';
@@ -164,17 +242,133 @@ export class Player {
         }
 
         if (this.health <= 0) {
-            this.isDead = true; this.health = 0; this.healthUI.innerText = `Health: 0`; this.controls.unlock();
-            document.getElementById('ui').style.display = 'none'; document.getElementById('settingsMenu').style.display = 'none';
-            this.hud.style.display = 'none'; this.hotbar.style.display = 'none'; this.deathScreen.style.display = 'flex';
-            document.getElementById('final-score').innerText = `Final Score: ${this.score}`;
+            this.health = 0; this.healthUI.innerText = `Health: 0`;
+            this.startDeathAnimation();
         }
     }
 
-    shoot() {
-        if (!this.canShoot || this.isDead) return;
-        const currentWeapon = this.weapons[this.currentWeaponIndex];
+    startDeathAnimation() {
+        if (this.isDead) return;
+        this.isDead = true;
+        this.canShoot = false;
+
+        // Hide weapons and overlays
+        this.weapons.forEach(w => w.visible = false);
+        this.crosshair.style.display = 'none';
+        this.scopeOverlay.style.display = 'none';
         
+        // Disable mouse look controls during falling animation
+        this.controls.pointerSpeed = 0;
+        
+        this.deathAnimTimer = 1.5; // 1.5 seconds of falling animation
+    }
+
+    // Eliminated: become an invisible, gun-less ghost that can still walk.
+    enterSpectator() {
+        if (this.isSpectator) return;
+        if (this.isFlying) this.exitFlight();
+        this.isSpectator = true;
+        this.isDead = true;          // networking: server counts us dead; drives kill feed
+        this.canShoot = false;
+
+        // Reset camera tilt/roll to 0 using Euler 'YXZ' rotation order to sync correctly
+        // with PointerLockControls and prevent upside-down view flips.
+        const euler = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+        euler.z = 0;
+        this.camera.quaternion.setFromEuler(euler);
+
+        // Drop any scope/zoom and hide every weapon + combat UI
+        this.currentZoomIndex = 0;
+        this.camera.fov = this.baseFov;
+        this.camera.updateProjectionMatrix();
+        this.controls.pointerSpeed = 1; // Restore mouse speed for spectating
+        this.weapons.forEach(w => w.visible = false);
+        this.crosshair.style.display = 'none';
+        this.scopeOverlay.style.display = 'none';
+        this.hud.style.display = 'none';
+        this.hotbar.style.display = 'none';
+        this.spectatorBanner.style.display = 'block';
+    }
+
+    // Round reset / respawn — restore a living, armed player.
+    exitSpectator() {
+        this.isSpectator = false;
+        this.isDead = false;
+        this.deathAnimTimer = 0;
+
+        // Reset camera tilt/roll to 0 using Euler 'YXZ' rotation order to prevent flips
+        const euler = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+        euler.z = 0;
+        this.camera.quaternion.setFromEuler(euler);
+
+        this.controls.pointerSpeed = 1; // Restore mouse speed
+        if (this.deathScreen) {
+            this.deathScreen.style.display = 'none';
+            this.deathScreen.style.opacity = '1';
+        }
+        this.health = 100;
+        this.healthUI.innerText = 'Health: 100';
+        this.canShoot = true;
+        this.currentWeaponIndex = 0;
+        this.currentZoomIndex = 0;
+        this.weapons.forEach((w, i) => w.visible = (i === 0));
+        this.spectatorBanner.style.display = 'none';
+        if (this.controls.isLocked) {
+            this.crosshair.style.display = 'block';
+            this.hud.style.display = 'block';
+            this.hotbar.style.display = 'block';
+        }
+    }
+
+    // ── Flight ──────────────────────────────────────────────────────────────
+    toggleFlight() {
+        if (this.isSpectator) return;
+        if (this.isFlying) this.exitFlight();
+        else               this.enterFlight();
+    }
+
+    enterFlight() {
+        const plane = this.getNearestPlane?.(this.camera.position);
+        if (!plane) return;
+        this.isFlying = true;
+        this.flightCellKey = plane.key;
+        this.weapons.forEach(w => w.visible = false);
+        this.crosshair.style.display = 'none';
+        this.scopeOverlay.style.display = 'none';
+        this.planePrompt.style.display = 'none';
+        this.flightHint.style.display = 'block';
+        this.onEnterPlane?.(plane.key);                  // hide the parked plane
+        this.flight.enter(plane.position, 0);
+    }
+
+    exitFlight() {
+        if (!this.isFlying) return;
+        const ground = this.flight.exit();
+        this.camera.position.set(ground.x, ground.y, ground.z);
+        this.velocity.set(0, 0, 0);
+        this.isFlying = false;
+        this.flightHint.style.display = 'none';
+        // Park the plane where we actually landed, not back at the original spot
+        this.onExitPlane?.(this.flightCellKey, ground.x, ground.z, ground.terrainY);
+        this.flightCellKey = null;
+        if (!this.isDead) {
+            this.weapons[this.currentWeaponIndex].visible = true;
+            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block';
+        }
+    }
+
+    _updateFlight(delta) {
+        this.flight.update(delta, {
+            pitch: Number(this.moveState.backward) - Number(this.moveState.forward), // S=nose up, W=dive
+            roll:  Number(this.moveState.right)    - Number(this.moveState.left),    // D=roll right
+            boost: this.moveState.run,                                               // Shift = throttle
+        });
+    }
+
+    shoot() {
+        if (!this.canShoot || this.isDead || this.isSpectator || this.isFlying) return;
+        const currentWeapon = this.weapons[this.currentWeaponIndex];
+
         this.recoilOffset = currentWeapon.stats.recoil;
         this.canShoot = false;
         setTimeout(() => this.canShoot = true, currentWeapon.stats.fireRate * 1000);
@@ -182,61 +376,128 @@ export class Player {
         if (currentWeapon.stats.type === 'tool') {
             this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
             const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-            
             if (intersects.length > 0 && intersects[0].distance < 40) {
                 const hit = intersects[0];
                 const baseRef = hit.object.baseRef;
-
                 if (baseRef) {
                     baseRef.upgrade();
                 } else {
                     const hitPos = hit.point;
-                    hitPos.y = this.getTerrainHeight(hitPos.x, hitPos.z); 
+                    hitPos.y = this.getTerrainHeight(hitPos.x, hitPos.z);
                     const newBase = new PlayerBase(hitPos.x, hitPos.y, hitPos.z, this.scene);
                     this.placedBlocks.push(newBase);
                 }
             }
         } else {
-            const bulletGeo = new THREE.SphereGeometry(0.2, 4, 4);
-            const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
-            const bullet = new THREE.Mesh(bulletGeo, bulletMat);
-            bullet.position.copy(this.camera.position);
-            const aimDir = new THREE.Vector3(); this.camera.getWorldDirection(aimDir);
-            bullet.velocity = aimDir.multiplyScalar(currentWeapon.stats.speed);
-            bullet.damage = currentWeapon.stats.damage; bullet.gravityDrop = currentWeapon.stats.drop; bullet.life = 3.0; 
-            this.scene.add(bullet); this.projectiles.push(bullet);
+            const aimDir = new THREE.Vector3();
+            this.camera.getWorldDirection(aimDir);
+
+            // ── Instant hitscan (damage registered the moment you fire) ──
+            // Standard FPS approach — no terrain blocking, lag-free, reliable.
+            this.raycaster.set(this.camera.position, aimDir);
+            const hits = this.raycaster.intersectObjects(this.scene.children, true);
+
+            for (const hit of hits) {
+                let cur = hit.object;
+                let entityHit = false;
+                while (cur) {
+                    if (cur.remotePlayerRef) {
+                        const rp = cur.remotePlayerRef;
+                        // Headshot: hit point sits in the upper ~head zone above
+                        // the player's feet (mesh.position.y is snapped to ground).
+                        const isHead = hit.point.y >= rp.mesh.position.y + 1.5;
+                        const damage = isHead
+                            ? currentWeapon.stats.damage * this.headshotMultiplier
+                            : currentWeapon.stats.damage;
+                        rp.flash();
+                        if (this.onRemotePlayerHit) this.onRemotePlayerHit(rp, damage, isHead);
+                        entityHit = true; break;
+                    }
+                    if (cur.animalRef)  { cur.animalRef.takeDamage(currentWeapon.stats.damage, this);  entityHit = true; break; }
+                    if (cur.monsterRef) { cur.monsterRef.takeDamage(currentWeapon.stats.damage, this); entityHit = true; break; }
+                    cur = cur.parent;
+                }
+                if (entityHit) break;
+                if (hit.object.isMesh) break; // hit solid world geometry — stop here
+            }
+
+            // Broadcast shot so other clients can show the tracer + muzzle flash
+            if (this.onShot) {
+                const pos = this.camera.position;
+                this.onShot(pos.x, pos.y, pos.z, aimDir.x, aimDir.y, aimDir.z,
+                            currentWeapon.stats.speed, currentWeapon.stats.drop);
+            }
+
+            // ── Visual tracer bullet (cosmetic only, no damage) ──
+            this._spawnTracer(this.camera.position, aimDir,
+                              currentWeapon.stats.speed, currentWeapon.stats.drop);
         }
     }
 
-    update(delta) {
-        if (!this.controls.isLocked || this.isDead) return;
+    // Shared tracer spawner — used for local shots and remote shots
+    _spawnTracer(origin, dir, speed, drop) {
+        const bullet = new THREE.Mesh(
+            new THREE.SphereGeometry(0.15, 4, 4),
+            new THREE.MeshBasicMaterial({ color: 0xffdd00 })
+        );
+        bullet.position.copy(origin).addScaledVector(dir, 2.0);
+        bullet.velocity    = dir.clone().multiplyScalar(speed);
+        bullet.gravityDrop = drop;
+        bullet.life        = 1.5;
+        this.scene.add(bullet);
+        this.projectiles.push(bullet);
+    }
 
-        for (let i = this.projectiles.length - 1; i >= 0; i--) {
-            const p = this.projectiles[i]; p.life -= delta;
-            if (p.life <= 0) { this.scene.remove(p); this.projectiles.splice(i, 1); continue; }
+    update(delta) {
+        // Spectators (isDead) keep walking — only fully stop when unlocked.
+        if (!this.controls.isLocked) return;
+
+        // Flying: the Airplane drives the camera; skip all on-foot logic.
+        if (this.isFlying) { this._updateFlight(delta); return; }
+
+        // On foot: show the boarding prompt when standing next to a parked plane.
+        if (!this.isSpectator && this.getNearestPlane) {
+            this.planePrompt.style.display = this.getNearestPlane(this.camera.position) ? 'block' : 'none';
+        }
+
+        // If dead and playing the falling camera animation
+        if (this.isDead && this.deathAnimTimer > 0) {
+            this.deathAnimTimer -= delta;
+
+            // Halt velocities
+            this.velocity.set(0, 0, 0);
+            this.knockbackVelocity.set(0, 0, 0);
+
+            // Interpolate camera height and roll/tilt sideways
+            const progress = Math.min(1.0, (1.5 - this.deathAnimTimer) / 1.5);
+            const floorHeight = this.getTerrainHeight(this.camera.position.x, this.camera.position.z);
             
-            p.velocity.y -= p.gravityDrop * delta;
-            const oldPos = p.position.clone(); 
-            const moveStep = p.velocity.clone().multiplyScalar(delta);
-            const dist = moveStep.length(); 
-            const dir = moveStep.clone().normalize();
+            // Drop camera from normal height (+1.7) to ground level (+0.3)
+            this.camera.position.y = floorHeight + 1.7 * (1.0 - progress) + 0.3 * progress;
             
-            this.raycaster.set(oldPos, dir);
-            const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-            
-            if (intersects.length > 0 && intersects[0].distance <= dist) {
-                const hitObject = intersects[0].object;
-                
-                let currentCheck = hitObject;
-                while (currentCheck) {
-                    if (currentCheck.animalRef) { currentCheck.animalRef.takeDamage(p.damage, this); break; }
-                    if (currentCheck.monsterRef) { currentCheck.monsterRef.takeDamage(p.damage, this); break; }
-                    currentCheck = currentCheck.parent;
-                }
-                
-                this.scene.remove(p); this.projectiles.splice(i, 1); continue;
+            // Tilt camera roll sideways to look like falling over
+            this.camera.rotation.z = (Math.PI / 4) * progress;
+
+            if (this.deathAnimTimer <= 0) {
+                // Now transition to spectator mode (restores normal controls and camera roll)
+                this.enterSpectator();
             }
-            p.position.add(moveStep);
+            return;
+        }
+
+        // Tracer bullets — visual only, damage was dealt instantly on fire
+        for (let i = this.projectiles.length - 1; i >= 0; i--) {
+            const p = this.projectiles[i];
+            p.life -= delta;
+            if (p.life <= 0) {
+                this.scene.remove(p);
+                p.geometry.dispose();
+                p.material.dispose();
+                this.projectiles.splice(i, 1);
+                continue;
+            }
+            p.velocity.y -= p.gravityDrop * delta;
+            p.position.addScaledVector(p.velocity, delta);
         }
 
         if (this.recoilOffset > 0) { this.recoilOffset -= delta * 2; if (this.recoilOffset < 0) this.recoilOffset = 0; }
@@ -291,8 +552,8 @@ export class Player {
             }
         }
         
-        if (this.camera.position.y < floorHeight + 3.0) { 
-            this.velocity.y = 0; this.camera.position.y = floorHeight + 3.0; this.canJump = true; 
+        if (this.camera.position.y < floorHeight + 1.7) {
+            this.velocity.y = 0; this.camera.position.y = floorHeight + 1.7; this.canJump = true; 
         } else { this.canJump = false; }
     }
 }

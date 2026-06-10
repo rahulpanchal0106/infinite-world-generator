@@ -43,9 +43,30 @@
 <body oncontextmenu="return false;">
     
     <div id="ui">
-        <h1>Click to Explore</h1>
-        <p>WASD to Move | SHIFT to Sprint | SPACE to Jump</p>
-        <p>1: Sniper | 2: Deagle | 3: BASE DEPLOYER</p>
+        <h1>Infinite World</h1>
+        <p style="margin-bottom: 18px;">WASD to Move &nbsp;|&nbsp; SHIFT to Sprint &nbsp;|&nbsp; SPACE to Jump</p>
+        <input
+            id="nameInput"
+            type="text"
+            maxlength="16"
+            placeholder="Enter your name..."
+            style="
+                padding: 10px 16px; font-size: 1.1rem; font-family: monospace;
+                background: #1a1a2e; color: #fff; border: 2px solid #ffdfbb;
+                border-radius: 6px; outline: none; text-align: center;
+                width: 220px; margin-bottom: 14px; letter-spacing: 1px;
+            "
+        />
+        <button
+            id="btn-play"
+            style="
+                padding: 10px 32px; font-size: 1.1rem; font-family: monospace;
+                font-weight: bold; background: #3d5c3d; color: #fff;
+                border: 2px solid #5a8f5a; border-radius: 6px; cursor: pointer;
+                letter-spacing: 1px;
+            "
+        >▶ Play</button>
+        <p style="margin-top: 14px; color: #666; font-size: 0.85rem;">1: Sniper &nbsp;|&nbsp; 2: Deagle &nbsp;|&nbsp; 3: Base Deployer</p>
     </div>
 
     <!-- NEW: Simple Tooltip -->
@@ -67,7 +88,7 @@
             <select id="setting-time" style="width: 100%; padding: 8px; background: #222; color: white; border: 1px solid #555;">
                 <option value="60">1 Minute</option>
                 <option value="300">5 Minutes</option>
-                <option value="1200">20 Minutes</option>
+                <option value="1200" selected>20 Minutes</option>
             </select>
         </div>
         <button id="btn-regenerate" style="width: 100%; padding: 10px; background: #8b3a3a; color: white; border: none; cursor: pointer; font-weight: bold; margin-bottom: 10px;">Regenerate World</button>
@@ -87,6 +108,7 @@
 
     <div id="death-screen" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(100, 0, 0, 0.8); z-index: 200; flex-direction: column; justify-content: center; align-items: center; color: white; font-family: monospace;">
         <h1 style="font-size: 5rem; margin: 0; color: #ff5555;">YOU DIED</h1>
+        <p id="killed-by" style="margin: 8px 0 4px 0; font-size: 1.3rem; color: #ffaaaa;"></p>
         <h2 id="final-score" style="margin: 10px 0 30px 0; color: #ffd700;">Final Score: 0</h2>
         <p>Refresh the page to try again.</p>
     </div>

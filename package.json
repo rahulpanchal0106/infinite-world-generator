@@ -1,0 +1,12 @@
+{
+  "name": "infinite-world-generator",
+  "version": "1.0.0",
+  "description": "Procedural world with multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
