@@ -25,11 +25,10 @@ class DynamicEnvironment {
 
         this.lights = { ambient: null, mainLight: null };
         this.skyMesh = null;
-        this.clouds = [];
 
         this._initLights();
         this._initSky();
-        this._initFluffyClouds();
+        this._initCloudBillboards();
     }
 
     _initLights() {
@@ -93,58 +92,147 @@ class DynamicEnvironment {
         this.scene.add(this.moonMesh);
     }
 
-    _initFluffyClouds() {
-        const cloudCount = 50; 
-        const puffGeo = new THREE.IcosahedronGeometry(1, 3); 
-        const puffMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0, flatShading: false });
+    _initCloudBillboards() {
+        // --- Procedural volumetric cloud texture ---
+        // Multi-octave 2D value noise baked to a 512² canvas. Each cloud puff gets
+        // this texture — the overlapping, varied-opacity layers give real volume.
+        const S = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = S;
+        const ctx = canvas.getContext('2d');
 
-        for (let i = 0; i < cloudCount; i++) {
-            const cloudGroup = new THREE.Group();
-            const cloudType = Math.random();
-            let puffCount, scaleMultiplier, spread;
+        // Tiny value-noise helper (tileable isn't needed — each puff gets random UV offset)
+        const perm = new Uint8Array(512);
+        for (let i = 0; i < 256; i++) perm[i] = i;
+        for (let i = 255; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [perm[i], perm[j]] = [perm[j], perm[i]]; }
+        for (let i = 0; i < 256; i++) perm[256 + i] = perm[i];
+        const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+        const lerp = (a, b, t) => a + t * (b - a);
+        const grad2 = (h, x, y) => { const u = h & 1 ? x : -x; const v = h & 2 ? y : -y; return u + v; };
+        const noise2 = (x, y) => {
+            const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+            const xf = x - Math.floor(x),   yf = y - Math.floor(y);
+            const u = fade(xf), v = fade(yf);
+            const aa = perm[perm[xi] + yi], ab = perm[perm[xi] + yi + 1];
+            const ba = perm[perm[xi + 1] + yi], bb = perm[perm[xi + 1] + yi + 1];
+            return lerp(lerp(grad2(aa, xf, yf), grad2(ba, xf - 1, yf), u),
+                        lerp(grad2(ab, xf, yf - 1), grad2(bb, xf - 1, yf - 1), u), v);
+        };
 
-            if (cloudType < 0.15) {
-                puffCount = 12 + Math.floor(Math.random() * 8);
-                scaleMultiplier = 2.5; 
-                spread = 300;
-            } else if (cloudType < 0.65) {
-                puffCount = 5 + Math.floor(Math.random() * 5);
-                scaleMultiplier = 1.0;
-                spread = 120;
-            } else {
-                puffCount = 3 + Math.floor(Math.random() * 2);
-                scaleMultiplier = 0.5;
-                spread = 60;
+        // FBM (fractal brownian motion) — 5 octaves for detail
+        const fbm = (x, y) => {
+            let val = 0, amp = 0.5, freq = 1;
+            for (let o = 0; o < 5; o++) {
+                val += noise2(x * freq, y * freq) * amp;
+                amp *= 0.5; freq *= 2.1;
             }
+            return val;
+        };
 
-            for(let j = 0; j < puffCount; j++) {
-                const puff = new THREE.Mesh(puffGeo, puffMat);
-                const size = (35 + Math.random() * 45) * scaleMultiplier;
-                puff.scale.set(size, size * 0.6, size); 
-                puff.position.set(
-                    (Math.random() - 0.5) * spread,
-                    Math.random() * (40 * scaleMultiplier), 
-                    (Math.random() - 0.5) * spread
-                );
-                puff.layers.set(1); // invisible to raycaster
-                puff.castShadow = true;
-                puff.receiveShadow = true;
-                cloudGroup.add(puff);
+        // Render the noise to the canvas
+        const imgData = ctx.createImageData(S, S);
+        const cx = S / 2;
+        for (let py = 0; py < S; py++) {
+            for (let px = 0; px < S; px++) {
+                // Distance from centre (soft circular falloff)
+                const dx = (px - cx) / cx, dy = (py - cx) / cx;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const mask = Math.max(0, 1 - dist * dist) ** 1.8; // smooth circle
+
+                // FBM cloud density
+                const n = fbm(px * 0.008 + 3.7, py * 0.008 + 7.1);
+                const density = Math.max(0, Math.min(1, (n + 0.35) * 1.4)) * mask;
+
+                // Slight blue-white tint variation
+                const bright = 0.92 + density * 0.08;
+                const r = Math.round(255 * bright);
+                const g = Math.round(252 * bright);
+                const b = Math.round(255 * bright);
+                const a = Math.round(density * 255);
+
+                const i = (py * S + px) * 4;
+                imgData.data[i]     = r;
+                imgData.data[i + 1] = g;
+                imgData.data[i + 2] = b;
+                imgData.data[i + 3] = a;
             }
-
-            const altitude = 250 + Math.pow(Math.random(), 2) * 650; 
-            cloudGroup.position.set(
-                Math.random() * 6000 - 3000, 
-                altitude, 
-                Math.random() * 6000 - 3000
-            );
-            
-            this.clouds.push(cloudGroup);
-            this.scene.add(cloudGroup);
         }
+        ctx.putImageData(imgData, 0, 0);
+        const tex = new THREE.CanvasTexture(canvas);
+
+        const mat = new THREE.MeshBasicMaterial({
+            map: tex,
+            transparent: true,
+            depthWrite: false,
+            fog: false,
+        });
+        const geo = new THREE.PlaneGeometry(1, 1);
+
+        // Cloud types: massive thunderheads, medium cumulus, small wisps
+        const CLOUD_TYPES = [
+            { weight: 0.12, minPuffs: 18, maxPuffs: 28, spread: 350, scaleMin: 100, scaleMax: 180, vertSpread: 80 },
+            { weight: 0.50, minPuffs:  8, maxPuffs: 14, spread: 160, scaleMin:  55, scaleMax:  95, vertSpread: 45 },
+            { weight: 0.80, minPuffs:  4, maxPuffs:  8, spread:  90, scaleMin:  30, scaleMax:  55, vertSpread: 20 },
+            { weight: 1.00, minPuffs:  2, maxPuffs:  3, spread:  40, scaleMin:  18, scaleMax:  32, vertSpread: 10 },
+        ];
+        const CLOUD_COUNT = 65;
+
+        this._cloudBases = [];
+        this._cloudPuffs = [];
+
+        for (let i = 0; i < CLOUD_COUNT; i++) {
+            const r = Math.random();
+            const type = CLOUD_TYPES.find(t => r < t.weight);
+            const puffCount = type.minPuffs + Math.floor(Math.random() * (type.maxPuffs - type.minPuffs + 1));
+
+            this._cloudBases.push({
+                x:        Math.random() * 6000 - 3000,
+                z:        Math.random() * 6000 - 3000,
+                altitude: 280 + Math.pow(Math.random(), 2) * 500,
+                start:    this._cloudPuffs.length,
+                count:    puffCount,
+                speedMul: 0.7 + Math.random() * 0.6,
+            });
+
+            for (let j = 0; j < puffCount; j++) {
+                const a = Math.random() * Math.PI * 2;
+                // Denser towards centre, sparser at edges (gaussian-ish distribution)
+                const dist = (Math.random() + Math.random()) * 0.5 * type.spread;
+                const baseScale = type.scaleMin + Math.random() * (type.scaleMax - type.scaleMin);
+                // Bigger puffs near the centre, smaller ones at the edges
+                const edgeFade = 1 - (dist / type.spread) * 0.4;
+                this._cloudPuffs.push({
+                    offX:  Math.cos(a) * dist,
+                    offY:  (Math.random() - 0.3) * type.vertSpread, // flat base, puff upwards
+                    offZ:  Math.sin(a) * dist,
+                    scale: baseScale * edgeFade,
+                    opacity: 0.5 + Math.random() * 0.5, // per-puff opacity for depth illusion
+                });
+            }
+        }
+
+        // Use per-instance colour to modulate opacity (alpha channel)
+        this.cloudMesh = new THREE.InstancedMesh(geo, mat, this._cloudPuffs.length);
+        this.cloudMesh.frustumCulled = false;
+        this.cloudMesh.layers.set(1);
+        this.cloudMesh.renderOrder = 1;
+
+        // Set per-instance opacity via instance colour's alpha-like trick:
+        // We store the opacity in the instance colour (white * opacity) and
+        // the material multiplies map colour × instance colour.
+        const colour = new THREE.Color();
+        for (let i = 0; i < this._cloudPuffs.length; i++) {
+            const o = this._cloudPuffs[i].opacity;
+            colour.setRGB(o, o, o);
+            this.cloudMesh.setColorAt(i, colour);
+        }
+        this.cloudMesh.instanceColor.needsUpdate = true;
+
+        this.scene.add(this.cloudMesh);
+        this._cloudDummy = new THREE.Object3D();
     }
 
-    update(deltaTime, playerPosition) {
+    update(deltaTime, playerPosition, camera = null) {
         this.time += (deltaTime / this.dayDurationSeconds) * 24;
         this.time %= 24; 
 
@@ -219,27 +307,31 @@ class DynamicEnvironment {
         this.lights.mainLight.color.copy(lightColor);
         this.lights.mainLight.castShadow = dirIntensity > 0.2;
 
-        // --- NEW: OMNI-DIRECTIONAL CLOUD TREADMILL ---
-        const cloudBoundary = 3000; // Half of our 6000 unit box
+        // --- INSTANCED BILLBOARD CLOUDS (Pillar 3) ---
+        // Move cloud bases with wind, wrap around the player, then set each puff's
+        // instance matrix to face the camera. ONE draw call for all ~300 puffs.
+        const cloudBoundary = 3000;
+        const dummy = this._cloudDummy;
+        const camPos = camera ? camera.position : { x: px, y: 400, z: pz };
 
-        this.clouds.forEach((cloud, index) => {
-            // 1. Move cloud with the wind
-            cloud.position.x += this.cloudSpeed * deltaTime * (1 + index * 0.1); 
+        this._cloudBases.forEach((base) => {
+            base.x += this.cloudSpeed * base.speedMul * deltaTime;
+            if (base.x > px + cloudBoundary) base.x -= cloudBoundary * 2;
+            else if (base.x < px - cloudBoundary) base.x += cloudBoundary * 2;
+            if (base.z > pz + cloudBoundary) base.z -= cloudBoundary * 2;
+            else if (base.z < pz - cloudBoundary) base.z += cloudBoundary * 2;
 
-            // 2. X-Axis Wrap (Handles wind AND player walking East/West)
-            if (cloud.position.x > px + cloudBoundary) {
-                cloud.position.x -= (cloudBoundary * 2);
-            } else if (cloud.position.x < px - cloudBoundary) {
-                cloud.position.x += (cloudBoundary * 2);
-            }
-
-            // 3. Z-Axis Wrap (Handles player walking North/South)
-            if (cloud.position.z > pz + cloudBoundary) {
-                cloud.position.z -= (cloudBoundary * 2);
-            } else if (cloud.position.z < pz - cloudBoundary) {
-                cloud.position.z += (cloudBoundary * 2);
+            for (let j = 0; j < base.count; j++) {
+                const puff = this._cloudPuffs[base.start + j];
+                dummy.position.set(base.x + puff.offX, base.altitude + puff.offY, base.z + puff.offZ);
+                dummy.lookAt(camPos.x, camPos.y, camPos.z);
+                // Wider than tall → flat-bottomed cumulus shape
+                dummy.scale.set(puff.scale, puff.scale * 0.55, 1);
+                dummy.updateMatrix();
+                this.cloudMesh.setMatrixAt(base.start + j, dummy.matrix);
             }
         });
+        this.cloudMesh.instanceMatrix.needsUpdate = true;
     }
 }
 

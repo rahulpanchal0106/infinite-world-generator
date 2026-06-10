@@ -27,8 +27,9 @@ export class NetworkManager {
     on(type, fn) { this._handlers[type] = fn; }
 
     // Broadcast this player's position/state 20× per second.
-    sendState({ x, y, z, rotY, health, weapon, spawnX, spawnY, spawnZ }) {
-        this._send('state', { x, y, z, rotY, health, weapon, spawnX, spawnY, spawnZ, name: this.playerName });
+    // Spreads the whole state object so flight fields (flying, qx..qw) pass through.
+    sendState(state) {
+        this._send('state', { ...state, name: this.playerName });
     }
 
     sendShot(ox, oy, oz, dx, dy, dz, speed) {

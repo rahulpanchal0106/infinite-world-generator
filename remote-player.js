@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { getTerrainHeight } from './terrain.js';
 import { loadGunModel } from './gun-model.js';
+import { createPlaneMesh } from './plane.js';
 
 // ── Shared animation clips (data only, safe to share across players) ───────
 // Pre-warm immediately on module load so clips are ready before the first
@@ -68,6 +69,12 @@ export class RemotePlayer {
         this._currentAnim   = null;
         this._currentAction = null;
         this._fbx           = null;
+
+        // Flight: when this player is in a plane we show an aircraft instead of
+        // the character and follow its full orientation (pitch/roll/yaw).
+        this._flying     = false;
+        this._planeMesh  = null;
+        this._targetQuat = new THREE.Quaternion();
 
         this.mesh = new THREE.Group();
         this.mesh.position.set(spawnX, spawnY, spawnZ);
@@ -233,10 +240,35 @@ export class RemotePlayer {
         }, 300);
     }
 
+    // Show an aircraft (and hide the character) while this player is flying.
+    _updatePlane(delta) {
+        if (this._flying) {
+            if (!this._planeMesh) { this._planeMesh = createPlaneMesh(); this.scene.add(this._planeMesh); }
+            // GLB may not have loaded when the mesh was first made — rebuild once it has.
+            if (this._planeMesh.children.length === 0) {
+                this.scene.remove(this._planeMesh);
+                this._planeMesh = createPlaneMesh();
+                this.scene.add(this._planeMesh);
+            }
+            this._planeMesh.visible = true;
+            this._planeMesh.position.copy(this.mesh.position);
+            this._planeMesh.quaternion.slerp(this._targetQuat, Math.min(1, delta * 12));
+            if (this._fbx) this._fbx.visible = false;
+        } else {
+            if (this._planeMesh) this._planeMesh.visible = false;
+            if (this._fbx) this._fbx.visible = true;
+        }
+    }
+
     // ── Network state ──────────────────────────────────────────────────────
     applyState(state) {
         if (state.name && state.name !== this.name) { this.name = state.name; this._buildLabel(); }
         if (state.isDead && !this.isDead)            { this.die(); return; }
+
+        this._flying = !!state.flying;
+        if (this._flying && state.qw !== undefined) {
+            this._targetQuat.set(state.qx, state.qy, state.qz, state.qw);
+        }
 
         this._targetPos.set(state.x, state.y, state.z);
 
@@ -266,11 +298,19 @@ export class RemotePlayer {
             const t = Math.min(1, delta * 15);
             this._prevPos.copy(this.mesh.position);
             this.mesh.position.lerp(this._targetPos, t);
-            // Snap Y to local terrain so the player always stands on the ground
-            // (avoids floating/sinking caused by server Y drift)
-            this.mesh.position.y = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
+            if (this._flying) {
+                // Keep the broadcast altitude — don't snap to the ground.
+            } else {
+                // Snap Y to local terrain so the player always stands on the ground
+                // (avoids floating/sinking caused by server Y drift)
+                this.mesh.position.y = getTerrainHeight(this.mesh.position.x, this.mesh.position.z);
+            }
             this.mesh.rotation.y += (this._targetRotY - this.mesh.rotation.y) * t;
         }
+
+        // Swap between character and aircraft, and follow the plane's full pose.
+        this._updatePlane(delta);
+        if (this._flying) return;   // character is hidden while the plane shows
 
         if (!this._mixer) return;
         this._mixer.update(delta);
@@ -318,6 +358,9 @@ export class RemotePlayer {
         if (this.isDead) return;
         this.isDead = true;
 
+        // Hide name label sprite
+        this.mesh.children.filter(c => c.isSprite).forEach(s => s.visible = false);
+
         if (this._mixer && _clips.die) {
             // Play the Dying clip once and clamp on the final (lying) frame.
             this._currentAction?.stop();
@@ -344,6 +387,7 @@ export class RemotePlayer {
         this.isDisposed = true;
         this._mixer?.stopAllAction();
         this._mixer = null;
+        if (this._planeMesh) { this.scene.remove(this._planeMesh); this._planeMesh = null; } // shared geo — don't dispose
         this.scene.remove(this.mesh);
         this.mesh.traverse(c => { c.geometry?.dispose(); c.material?.dispose(); });
     }

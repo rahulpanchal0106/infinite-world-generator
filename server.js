@@ -120,6 +120,9 @@ wss.on('connection', (ws) => {
                     health: msg.health,
                     isDead: !!msg.isDead,
                     weapon: msg.weapon,
+                    // Flight state (so others see the plane move + bank)
+                    flying: !!msg.flying,
+                    qx: msg.qx, qy: msg.qy, qz: msg.qz, qw: msg.qw,
                 });
 
                 // Track alive/dead transitions

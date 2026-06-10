@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { PlayerBase } from './entities.js';
 import { loadGunModel } from './gun-model.js';
+import { Airplane } from './plane.js';
 
 export class Player {
     constructor(camera, domElement, uiElement, getTerrainHeightFunc, checkCollisionFunc, scene) {
@@ -17,7 +18,12 @@ export class Player {
         this.deathScreen = document.getElementById('death-screen');
         this.hotbar = document.getElementById('hotbar'); 
         
-        uiElement.addEventListener('click', () => this.controls.lock());
+        uiElement.addEventListener('click', (e) => {
+            // Don't lock if the click was on an input, button, or any other
+            // interactive element — let those handle their own events normally.
+            if (e.target.closest('input, button, select, a, textarea')) return;
+            this.controls.lock();
+        });
         this.controls.addEventListener('lock', () => {
             uiElement.style.display = 'none';
             if (this.isSpectator) { this.spectatorBanner.style.display = 'block'; return; }
@@ -51,6 +57,36 @@ export class Player {
         ].join(';');
         this.spectatorBanner.textContent = '👻 SPECTATING — you were eliminated';
         document.body.appendChild(this.spectatorBanner);
+
+        // ── Flight ──
+        this.isFlying = false;
+        this.flight = new Airplane(scene, camera);
+        this.flightCellKey = null;
+        this.getNearestPlane = null;   // set by main.js → PlaneManager.getNearest
+        this.onEnterPlane = null;      // (cellKey) → hide that parked plane
+        this.onExitPlane = null;       // (cellKey) → show that parked plane again
+
+        // "Press F to fly" prompt (shown when near a parked plane on foot)
+        this.planePrompt = document.createElement('div');
+        this.planePrompt.style.cssText = [
+            'position:absolute', 'bottom:120px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.7)', 'color:#ffe08a', 'font-family:monospace',
+            'font-size:1.1rem', 'padding:8px 20px', 'border-radius:6px',
+            'border:1px solid #6a5a2a', 'z-index:160', 'pointer-events:none', 'display:none'
+        ].join(';');
+        this.planePrompt.textContent = '✈️  Press F to fly';
+        document.body.appendChild(this.planePrompt);
+
+        // Flight controls hint (shown while flying)
+        this.flightHint = document.createElement('div');
+        this.flightHint.style.cssText = [
+            'position:absolute', 'bottom:20px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.6)', 'color:#cfe8ff', 'font-family:monospace',
+            'font-size:0.95rem', 'padding:6px 16px', 'border-radius:6px',
+            'border:1px solid #355', 'z-index:160', 'pointer-events:none', 'display:none'
+        ].join(';');
+        this.flightHint.textContent = '✈️  W/S pitch · A/D roll · Shift boost · F land';
+        document.body.appendChild(this.flightHint);
 
         this.raycaster = new THREE.Raycaster();
         this.raycaster.layers.set(0); // layer 0 only — ignores weapons (layer 1)
@@ -116,9 +152,11 @@ export class Player {
             if (e.code === 'ShiftLeft') this.moveState.run = true;
             if (e.code === 'Space' && this.canJump) this.velocity.y += 15; 
             
-            if (e.code === 'Digit1') this.switchWeapon(0); 
-            if (e.code === 'Digit2') this.switchWeapon(1); 
-            if (e.code === 'Digit3') this.switchWeapon(2); 
+            if (e.code === 'Digit1') this.switchWeapon(0);
+            if (e.code === 'Digit2') this.switchWeapon(1);
+            if (e.code === 'Digit3') this.switchWeapon(2);
+
+            if (e.code === 'KeyF') this.toggleFlight();
         });
         document.addEventListener('keyup', (e) => {
             if (e.code === 'KeyW') this.moveState.forward = false;
@@ -136,7 +174,7 @@ export class Player {
     }
 
     switchWeapon(index) {
-        if (this.isSpectator) return;
+        if (this.isSpectator || this.isDead || this.isFlying) return;
         if (this.currentWeaponIndex === index) return;
         if (this.currentZoomIndex > 0) { this.currentZoomIndex = 0; this.applyZoom(); }
         this.weapons.forEach((w, i) => w.visible = (i === index));
@@ -144,7 +182,7 @@ export class Player {
     }
 
     toggleScope() {
-        if (this.isSpectator) return;
+        if (this.isSpectator || this.isDead || this.isFlying) return;
         if (this.currentWeaponIndex !== 0) return;
         this.currentZoomIndex++;
         if (this.currentZoomIndex >= this.zoomLevels.length) this.currentZoomIndex = 0; 
@@ -205,23 +243,45 @@ export class Player {
 
         if (this.health <= 0) {
             this.health = 0; this.healthUI.innerText = `Health: 0`;
-            this.enterSpectator();
+            this.startDeathAnimation();
         }
     }
 
+    startDeathAnimation() {
+        if (this.isDead) return;
+        this.isDead = true;
+        this.canShoot = false;
+
+        // Hide weapons and overlays
+        this.weapons.forEach(w => w.visible = false);
+        this.crosshair.style.display = 'none';
+        this.scopeOverlay.style.display = 'none';
+        
+        // Disable mouse look controls during falling animation
+        this.controls.pointerSpeed = 0;
+        
+        this.deathAnimTimer = 1.5; // 1.5 seconds of falling animation
+    }
+
     // Eliminated: become an invisible, gun-less ghost that can still walk.
-    // We keep the pointer locked so movement keeps working — no death screen.
     enterSpectator() {
         if (this.isSpectator) return;
+        if (this.isFlying) this.exitFlight();
         this.isSpectator = true;
         this.isDead = true;          // networking: server counts us dead; drives kill feed
         this.canShoot = false;
+
+        // Reset camera tilt/roll to 0 using Euler 'YXZ' rotation order to sync correctly
+        // with PointerLockControls and prevent upside-down view flips.
+        const euler = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+        euler.z = 0;
+        this.camera.quaternion.setFromEuler(euler);
 
         // Drop any scope/zoom and hide every weapon + combat UI
         this.currentZoomIndex = 0;
         this.camera.fov = this.baseFov;
         this.camera.updateProjectionMatrix();
-        this.controls.pointerSpeed = 1;
+        this.controls.pointerSpeed = 1; // Restore mouse speed for spectating
         this.weapons.forEach(w => w.visible = false);
         this.crosshair.style.display = 'none';
         this.scopeOverlay.style.display = 'none';
@@ -234,6 +294,18 @@ export class Player {
     exitSpectator() {
         this.isSpectator = false;
         this.isDead = false;
+        this.deathAnimTimer = 0;
+
+        // Reset camera tilt/roll to 0 using Euler 'YXZ' rotation order to prevent flips
+        const euler = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+        euler.z = 0;
+        this.camera.quaternion.setFromEuler(euler);
+
+        this.controls.pointerSpeed = 1; // Restore mouse speed
+        if (this.deathScreen) {
+            this.deathScreen.style.display = 'none';
+            this.deathScreen.style.opacity = '1';
+        }
         this.health = 100;
         this.healthUI.innerText = 'Health: 100';
         this.canShoot = true;
@@ -248,8 +320,53 @@ export class Player {
         }
     }
 
+    // ── Flight ──────────────────────────────────────────────────────────────
+    toggleFlight() {
+        if (this.isSpectator) return;
+        if (this.isFlying) this.exitFlight();
+        else               this.enterFlight();
+    }
+
+    enterFlight() {
+        const plane = this.getNearestPlane?.(this.camera.position);
+        if (!plane) return;
+        this.isFlying = true;
+        this.flightCellKey = plane.key;
+        this.weapons.forEach(w => w.visible = false);
+        this.crosshair.style.display = 'none';
+        this.scopeOverlay.style.display = 'none';
+        this.planePrompt.style.display = 'none';
+        this.flightHint.style.display = 'block';
+        this.onEnterPlane?.(plane.key);                  // hide the parked plane
+        this.flight.enter(plane.position, 0);
+    }
+
+    exitFlight() {
+        if (!this.isFlying) return;
+        const ground = this.flight.exit();
+        this.camera.position.set(ground.x, ground.y, ground.z);
+        this.velocity.set(0, 0, 0);
+        this.isFlying = false;
+        this.flightHint.style.display = 'none';
+        // Park the plane where we actually landed, not back at the original spot
+        this.onExitPlane?.(this.flightCellKey, ground.x, ground.z, ground.terrainY);
+        this.flightCellKey = null;
+        if (!this.isDead) {
+            this.weapons[this.currentWeaponIndex].visible = true;
+            if (this.currentZoomIndex === 0) this.crosshair.style.display = 'block';
+        }
+    }
+
+    _updateFlight(delta) {
+        this.flight.update(delta, {
+            pitch: Number(this.moveState.backward) - Number(this.moveState.forward), // S=nose up, W=dive
+            roll:  Number(this.moveState.right)    - Number(this.moveState.left),    // D=roll right
+            boost: this.moveState.run,                                               // Shift = throttle
+        });
+    }
+
     shoot() {
-        if (!this.canShoot || this.isDead || this.isSpectator) return;
+        if (!this.canShoot || this.isDead || this.isSpectator || this.isFlying) return;
         const currentWeapon = this.weapons[this.currentWeaponIndex];
 
         this.recoilOffset = currentWeapon.stats.recoil;
@@ -334,6 +451,39 @@ export class Player {
     update(delta) {
         // Spectators (isDead) keep walking — only fully stop when unlocked.
         if (!this.controls.isLocked) return;
+
+        // Flying: the Airplane drives the camera; skip all on-foot logic.
+        if (this.isFlying) { this._updateFlight(delta); return; }
+
+        // On foot: show the boarding prompt when standing next to a parked plane.
+        if (!this.isSpectator && this.getNearestPlane) {
+            this.planePrompt.style.display = this.getNearestPlane(this.camera.position) ? 'block' : 'none';
+        }
+
+        // If dead and playing the falling camera animation
+        if (this.isDead && this.deathAnimTimer > 0) {
+            this.deathAnimTimer -= delta;
+
+            // Halt velocities
+            this.velocity.set(0, 0, 0);
+            this.knockbackVelocity.set(0, 0, 0);
+
+            // Interpolate camera height and roll/tilt sideways
+            const progress = Math.min(1.0, (1.5 - this.deathAnimTimer) / 1.5);
+            const floorHeight = this.getTerrainHeight(this.camera.position.x, this.camera.position.z);
+            
+            // Drop camera from normal height (+1.7) to ground level (+0.3)
+            this.camera.position.y = floorHeight + 1.7 * (1.0 - progress) + 0.3 * progress;
+            
+            // Tilt camera roll sideways to look like falling over
+            this.camera.rotation.z = (Math.PI / 4) * progress;
+
+            if (this.deathAnimTimer <= 0) {
+                // Now transition to spectator mode (restores normal controls and camera roll)
+                this.enterSpectator();
+            }
+            return;
+        }
 
         // Tracer bullets — visual only, damage was dealt instantly on fire
         for (let i = this.projectiles.length - 1; i >= 0; i--) {

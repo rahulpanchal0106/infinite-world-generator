@@ -5,6 +5,7 @@ import { Player } from './player.js';
 import { NetworkManager } from './network.js';
 import { RemotePlayer } from './remote-player.js';
 import { Minimap } from './minimap.js';
+import { PlaneManager } from './plane.js';
 
 // --- GLOBAL SETTINGS STATE ---
 window.GameSettings = {
@@ -34,6 +35,7 @@ scene.add(ocean);
 // Initialize Game Modules
 const environment = new DynamicEnvironment(scene, { dayDurationSeconds: 1200, initialTime: 8, cloudSpeed: 40 });
 let chunkManager = new ChunkManager(scene);
+const planeManager = new PlaneManager(scene);
 
 // --- UI AND SETTINGS LOGIC ---
 const uiElement    = document.getElementById('ui');
@@ -47,6 +49,11 @@ const player = new Player(
     (x, z, r) => chunkManager.checkCollision(x, z, r),
     scene
 );
+
+// Plane boarding wiring
+player.getNearestPlane = (pos) => planeManager.getNearest(pos);
+player.onEnterPlane    = (key) => planeManager.setOccupied(key, true);
+player.onExitPlane     = (key, x, z, terrainY) => planeManager.landPlane(key, x, z, terrainY);
 
 // Play button — read name, update NetworkManager, then lock pointer
 document.getElementById('btn-play')?.addEventListener('click', (e) => {
@@ -198,6 +205,10 @@ network.on('snapshot', (msg) => {
     for (const state of (msg.players ?? [])) {
         if (state.id === network.playerId) continue;
         let rp = remotePlayers.get(state.id);
+        if (rp && rp.isDisposed) {
+            remotePlayers.delete(state.id);
+            rp = null;
+        }
         if (!rp) {
             if (state.isDead) continue;   // eliminated players stay invisible (spectators)
             rp = new RemotePlayer(state.id, scene, state.x, state.y, state.z, state.name);
@@ -212,6 +223,10 @@ network.on('snapshot', (msg) => {
 network.on('state', (msg) => {
     if (msg.id === network.playerId) return;
     let rp = remotePlayers.get(msg.id);
+    if (rp && rp.isDisposed) {
+        remotePlayers.delete(msg.id);
+        rp = null;
+    }
     if (!rp) {
         if (msg.isDead) return;   // eliminated players stay invisible (spectators)
         rp = new RemotePlayer(msg.id, scene, msg.x, msg.y, msg.z, msg.name);
@@ -283,6 +298,32 @@ network.on('kill_feed', (msg) => {
     if (isLocalDeath) {
         const el = document.getElementById('killed-by');
         if (el) el.textContent = `☠️  Killed by ${msg.killerName}`;
+        
+        // Show the death screen overlay and auto-fade it out in 10 seconds total
+        const deathScreen = document.getElementById('death-screen');
+        if (deathScreen) {
+            deathScreen.style.display = 'flex';
+            deathScreen.style.opacity = '1';
+            deathScreen.style.transition = 'opacity 1.0s ease-in-out';
+
+            const finalScoreEl = document.getElementById('final-score');
+            if (finalScoreEl) {
+                finalScoreEl.textContent = `Final Score: ${player.score}`;
+            }
+
+            // Clear any active timeouts
+            if (window._deathFadeTimeout1) clearTimeout(window._deathFadeTimeout1);
+            if (window._deathFadeTimeout2) clearTimeout(window._deathFadeTimeout2);
+
+            // Hold for 9 seconds, then fade out over 1 second (10 seconds total)
+            window._deathFadeTimeout1 = setTimeout(() => {
+                deathScreen.style.opacity = '0';
+                window._deathFadeTimeout2 = setTimeout(() => {
+                    deathScreen.style.display = 'none';
+                }, 1000);
+            }, 9000);
+        }
+
         // Also make the kill feed visible over the death screen so they see it
         killFeedEl.style.display = 'block';
         killFeedEl.style.zIndex  = '250';   // above death screen (z-index 200)
@@ -378,9 +419,10 @@ function animate() {
     const time  = performance.now();
     const delta = Math.min((time - prevTime) / 1000, 0.1);
 
-    environment.update(delta, camera.position);
+    environment.update(delta, camera.position, camera);
     player.update(delta);
     chunkManager.update(camera.position);
+    planeManager.update(camera.position);
     chunkManager.updateEntities(delta, getTerrainHeight, player);
 
     // Broadcast any entity deaths that happened this frame
@@ -397,7 +439,7 @@ function animate() {
     remotePlayers.forEach(rp => rp.update(delta));
 
     // Minimap
-    minimap.update(camera, remotePlayers);
+    minimap.update(camera, remotePlayers, chunkManager, planeManager);
 
     // Broadcast own position to the server
     broadcastTimer += delta;
@@ -408,7 +450,7 @@ function animate() {
         const _dir = new THREE.Vector3();
         camera.getWorldDirection(_dir);
         const camYaw = Math.atan2(_dir.x, _dir.z);
-        network.sendState({
+        const st = {
             x: camera.position.x,
             y: camera.position.y,
             z: camera.position.z,
@@ -416,11 +458,20 @@ function animate() {
             health: player.health,
             isDead: player.isDead,
             weapon: player.currentWeaponIndex,
+            flying: player.isFlying,
             // Tell the server the canonical spawn so new joiners get it
             spawnX: spawnPoint.x,
             spawnY: spawnPoint.y,
             spawnZ: spawnPoint.z,
-        });
+        };
+        // While flying, broadcast the PLANE's pose (not the chase camera) so
+        // other players see the aircraft moving + banking correctly.
+        if (player.isFlying) {
+            const ps = player.flight.getNetState();
+            st.x = ps.x; st.y = ps.y; st.z = ps.z;
+            st.qx = ps.qx; st.qy = ps.qy; st.qz = ps.qz; st.qw = ps.qw;
+        }
+        network.sendState(st);
         if (network.connected) refreshMpHUD();
 
         // Detect local-player death transition and broadcast kill feed

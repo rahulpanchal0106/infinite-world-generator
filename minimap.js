@@ -34,7 +34,7 @@ export class Minimap {
     show() { this._wrap.style.display = 'block'; this._visible = true; }
     hide() { this._wrap.style.display = 'none';  this._visible = false; }
 
-    update(camera, remotePlayers) {
+    update(camera, remotePlayers, chunkManager, planeManager) {
         if (!this._visible) return;
 
         const ctx   = this._ctx;
@@ -105,6 +105,54 @@ export class Minimap {
                 ctx.fillText(rp.name, mp.x, mp.y - 9);
             }
         });
+
+        // ── Monsters ─────────────────────────────────────────────────────
+        if (chunkManager) {
+            for (const chunk of chunkManager.chunks.values()) {
+                for (const monster of chunk.monsters) {
+                    if (monster.isDead || monster.isDisposed) continue;
+                    const mp = toMap(monster.mesh.position.x, monster.mesh.position.z);
+                    const ddx = mp.x - cx, ddy = mp.y - cy;
+                    if (ddx * ddx + ddy * ddy > cx * cx) continue; // outside circle
+
+                    // Pulsing glow ring
+                    ctx.beginPath();
+                    ctx.arc(mp.x, mp.y, 9, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255,100,0,0.18)';
+                    ctx.fill();
+
+                    // Downward-pointing triangle (danger marker)
+                    ctx.beginPath();
+                    ctx.moveTo(mp.x,      mp.y + 6);
+                    ctx.lineTo(mp.x - 5,  mp.y - 4);
+                    ctx.lineTo(mp.x + 5,  mp.y - 4);
+                    ctx.closePath();
+                    ctx.fillStyle   = '#ff6600';
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth   = 1.2;
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // ── Parked planes (cyan ✈) — clamped to the rim when out of range ──
+        if (planeManager && planeManager.parked) {
+            ctx.font = '13px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const rim = cx - 9;
+            for (const entry of planeManager.parked.values()) {
+                const mp = toMap(entry.position.x, entry.position.z);
+                let ddx = mp.x - cx, ddy = mp.y - cy;
+                const dist = Math.hypot(ddx, ddy) || 1;
+                let x = mp.x, y = mp.y;
+                if (dist > rim) { x = cx + (ddx / dist) * rim; y = cy + (ddy / dist) * rim; }
+                ctx.fillStyle = '#33ddff';
+                ctx.fillText('✈', x, y);
+            }
+            ctx.textBaseline = 'alphabetic';
+        }
 
         // ── Local player — fixed at centre, arrow always points up ────────
         ctx.save();
